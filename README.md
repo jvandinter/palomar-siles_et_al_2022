@@ -1,12 +1,8 @@
 # README #
 
-This README would normally document whatever steps are necessary to get your application up and running.
+This Repository is a code deposition of the performed Ribo-seq analyses and raw figures in the FUr readthrough manuscript (link here). 
 
-### What is this repository for? ###
 
-* Quick summary
-* Version
-* [Learn Markdown](https://bitbucket.org/tutorials/markdowndemo)
 
 ### How do I get set up? ###
 
@@ -17,13 +13,11 @@ This README would normally document whatever steps are necessary to get your app
 * How to run tests
 * Deployment instructions
 
-### Contribution guidelines ###
 
-* Writing tests
-* Code review
-* Other guidelines
+### Contributors ###
 
-### Who do I talk to? ###
+Contact us for more information regarding our analyses:
 
-* Repo owner or admin
-* Other community or team contact
+j.t.vandinter-3@prinsesmaximacentrum.nl
+d.a.hofman-3@prinsesmaximacentrum.nl
+s.vanheesch@prinsesmaximacentrum.nl
