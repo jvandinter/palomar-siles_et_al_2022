@@ -8,12 +8,18 @@ This repository is a code deposition of the performed Ribo-seq analyses and raw 
 
 
 - Data
+    * Data files for figure generation
 - Figures
+    * Code to generate the figures
 - Pipeline
+    * Code to process Ribo-seq libraries
+
 
 ## Overview of the Ribo-seq pipeline ##
 
-Required files are in the Ribo-seq config located in the **data** folder. Our local computer cluster uses the SLURM workload manager. In addition, we use the LMOD system to load specific versions of packages.
+
+Required files are in the Ribo-seq config located in the **data** folder. Our local computer cluster uses the SLURM workload manager. In addition, we use the LMOD system to load specific versions of packages. For the RNA-seq data, *mrp_rna_trim.sh* was used to pre-process the standard RNA-seq data.
+
 
 1. Quality control and 3' adapter trimming with **TrimGalore**
 2. Remove unwanted RNAs with **bowtie2**
@@ -41,7 +47,7 @@ Before running the pipeline, make sure you have the following files:
 - *bowtie2* v2.4.2
 - *STAR* v2.7.8a
 - *samtools* v1.12
-- *R v4.0.3 (cluster)
+- *R* v4.0.3 (cluster)
 - *R* v4.0.4 (figures)
 
 
