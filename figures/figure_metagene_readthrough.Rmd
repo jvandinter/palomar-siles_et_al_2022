@@ -1,0 +1,340 @@
+---
+title: "Metagene_stop_plots"
+author: "Jip van Dinter"
+date: "12/16/2021"
+output: html_document
+---
+
+This Rmarkdown requires output from riboseqc as input. Please make sure that the input is available in the data_dir.
+
+```{r Global variables}
+data_dir <- RiboseQC RData folder
+save_dir <- save dir
+read_length <- 28
+riboseqc_scheme <- c("red","forestgreen","blue")
+color_scheme <- c("#8F8F93","#43C1F0","#FF8800")
+```
+
+```{r Libraries}
+library(ggplot2)
+library(ggbeeswarm)
+library(scales)
+```
+
+```{r Load data Metagene}
+file_list <- list.files(path = data_dir, pattern = "*._results_RiboseQC$", recursive = T)
+
+riboseqc_dfs <- list()
+
+for (i in seq_along(file_list)) {
+  
+  sample_file = file_list[i]
+  # Get Sample ID from name
+  sample_id = sub(".*H1299-","",sample_file)
+  sample_id = sub("_results.*","",sample_id)
+  
+  print(paste("Parsing", sample_id, sep = " "))
+  
+  # Load R data
+  load(file = paste(data_dir, sample_file, sep = "/"))
+  
+  f <- as.data.frame(res_all$profiles_P_sites$P_sites_subcodon)
+  f$rel_pos <- rownames(f)
+  f$pos <- 1:nrow(f)
+  f$frame <- as.character(f$pos %% 3)
+
+  df <- data.frame(pos = f$pos,
+                   reads = f[,paste("nucl",read_length,sep = ".")],
+                   total = sum(f[,paste("nucl",read_length,sep = ".")]),
+                   frame = f$frame,
+                   sample_id = rep(sample_id,nrow(f)),
+                   vector = rep(ifelse(grepl("EV", rep(sample_id,3)),
+                                                 "EV",
+                                                 "R213X"),nrow(f)),
+                   treatment = rep(factor(ifelse(grepl("G418", rep(sample_id,3)),
+                                                 "G418",
+                                                 ifelse(grepl("5FUR",rep(sample_id,3)),
+                                                       "5FUR",
+                                                       "NT")),
+                                          levels = c("NT","5FUR","G418")),nrow(f))
+                   )
+  riboseqc_dfs[[sample_id]] <- df
+}
+
+riboseqc_df <- do.call("rbind",riboseqc_dfs)
+rownames(riboseqc_df) <- NULL
+split_by_treatment <- split(riboseqc_df, riboseqc_df$treatment)
+
+test = split_by_treatment[[1]]
+pos_df = reshape(test,
+                   idvar = "pos", 
+                   v.names = "reads",
+                   timevar = "sample_id",
+                   direction = "wide")
+pos_df$total <- sum(pos_df[,c(5:12)])
+pos_df$sums <- rowSums(pos_df[,c(5:12)])
+pos_df$percentage <- pos_df$sums / pos_df$total
+
+riboseqc_treatment_df <- data.frame()
+riboseqc_treatment_df <- bind_rows(lapply(split_by_treatment, function(x){
+  pos_df = reshape(x,
+                   idvar = "pos", 
+                   v.names = "reads",
+                   timevar = "sample_id",
+                   direction = "wide")
+  pos_df$total <- sum(pos_df[,c(7:10)])
+  pos_df$sums <- rowSums(pos_df[,c(7:10)])
+  pos_df$percentage <- pos_df$sums / total_sum
+  df = pos_df[,c("pos","frame","treatment","vector","percentage")]
+  return(df)
+}))
+
+plot_df <- unique(riboseqc_df)
+plot_df$group <- paste(plot_df$vector,plot_df$treatment, sep = "-")
+```
+
+```{r Load data Boxplot}
+file_list <- list.files(path = data_dir, pattern = "*._results_RiboseQC$", recursive = T)
+
+box_dfs <- list()
+
+for (i in seq_along(file_list)) {
+  
+  sample_file = file_list[i]
+  # Get Sample ID from name
+  sample_id = sub(".*H1299-","",sample_file)
+  sample_id = sub("_results.*","",sample_id)
+  
+  print(paste("Parsing", sample_id, sep = " "))
+  
+  # Load R data
+  load(file = paste(data_dir, sample_file, sep = "/"))
+  
+  f <- as.data.frame(res_all$profiles_P_sites$P_sites_subcodon)
+  f$rel_pos <- rownames(f)
+  f$pos <- 1:nrow(f)
+  f$frame <- as.character(f$pos %% 3)
+
+  # Parse data to ratios
+  before <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                       f$pos %in% 1:143))
+  before_frame0 <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                       f$pos %in% 1:143 & f$frame == "0"))
+  before_frame1 <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                       f$pos %in% 1:143 & f$frame == "1"))
+  before_frame2 <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                       f$pos %in% 1:143 & f$frame == "2"))
+  after <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                      f$pos %in% 145:nrow(f)))
+  after_frame0 <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                      f$pos %in% 145:nrow(f) & f$frame == "0"))
+  after_frame1 <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                      f$pos %in% 145:nrow(f) & f$frame == "1"))
+  after_frame2 <- sum(subset(f[,paste("nucl",read_length,sep = ".")], 
+                      f$pos %in% 145:nrow(f) & f$frame == "2"))
+  ratio <- after / before
+  ratio_frame0 <- after_frame0 / before_frame0
+  ratio_frame1 <- after_frame1 / before_frame1
+  ratio_frame2 <- after_frame2 / before_frame2
+  
+  # Put it in a DF
+  df <- data.frame(before = before,
+                   after = after,
+                   ratio = ratio,
+                   before_inframe = before_frame,
+                   after_inframe = after_frame,
+                   ratio_frame0 = ratio_frame0,
+                   ratio_frame1 = ratio_frame1,
+                   ratio_frame2 = ratio_frame2,
+                   sample_id = sample_id,
+                   vector = ifelse(grepl("EV", sample_id),
+                                                 "EV",
+                                                 "R213X"),
+                   treatment = factor(ifelse(grepl("G418",sample_id),
+                                                 "G418",
+                                                 ifelse(grepl("5FUR",sample_id),
+                                                       "FUr",
+                                                       "NT")),
+                                          levels = c("NT","FUr","G418"))
+                   )
+  box_dfs[[sample_id]] <- df
+}
+
+box_df <- do.call("rbind",box_dfs)
+box_df$group <- paste(box_df$vector,box_df$treatment, sep = "-")
+box_df$treatment <- factor(box_df$treatment, levels = c("NT","FUr","G418"))
+
+write.table(box_df, file = paste(save_dir,"ribo_metagene_ratio.txt",sep = "/"),
+            quote = F, sep = ";", row.names = F, dec = ",")
+
+split_by_treatment <- split(box_df, box_df$treatment)
+
+box_df_plotdata <- bind_rows(lapply(split_by_treatment, function(x) {
+  print(paste("Parsing", unique(x$sample_id), sep = " "))
+  df <- data.frame(sample_id = x$sample_id,
+                   treatment = x$treatment,
+                   ratio_frame0 = x$ratio_frame0,
+                   mean = mean(x$ratio_frame0),
+                   median = median(x$ratio_frame0),
+                   sd = sd(x$ratio_frame0),
+                   se = sd(x$ratio_frame0)/sqrt(8),
+                   first_quartile = quantile(x$ratio_frame0)[2],
+                   third_quartile = quantile(x$ratio_frame0)[4])
+  return(df)
+}))
+
+write.table(box_df_plotdata, file = paste(save_dir,"ribo_metagene_plotdata.csv",sep = "/"),
+           quote = F, sep = ";", row.names = F, dec = ",")
+
+```
+
+```{r plot boxplot ratios}
+f0 <- ggplot(data = box_df, 
+       aes(x = treatment,
+           y = ratio_frame0,
+           fill = treatment)) +
+  geom_boxplot(show.legend = FALSE) +
+  geom_beeswarm(show.legend = FALSE) +
+  scale_fill_manual(values = color_scheme) +
+  scale_color_manual(values = color_scheme) +
+  xlab("Treatment") +
+  ylab("Stop Codon Readthrough Ratio") +
+  ggtitle("frame 0") +
+  scale_y_continuous(labels = percent) +
+  theme_classic() +
+  theme(text = element_text(size = 20))
+f1 <- ggplot(data = box_df, 
+       aes(x = treatment,
+           y = ratio_frame1,
+           fill = treatment)) +
+  geom_boxplot(show.legend = FALSE) +
+  geom_beeswarm(show.legend = FALSE) +
+  scale_fill_manual(values = color_scheme) +
+  scale_color_manual(values = color_scheme) +
+  xlab("Treatment") +
+  ylab("Stop Codon Readthrough Ratio") +
+  ggtitle("frame 1") +
+  scale_y_continuous(labels = percent) +
+  theme_classic() +
+  theme(text = element_text(size = 20))
+f2 <- ggplot(data = box_df, 
+       aes(x = treatment,
+           y = ratio_frame2,
+           fill = treatment)) +
+  geom_boxplot(show.legend = FALSE) +
+  geom_beeswarm(show.legend = FALSE) +
+  scale_fill_manual(values = color_scheme) +
+  scale_color_manual(values = color_scheme) +
+  xlab("Treatment") +
+  ylab("Stop Codon Readthrough Ratio") +
+  ggtitle("frame 2") +
+  scale_y_continuous(labels = percent) +
+  theme_classic() +
+  theme(text = element_text(size = 20))
+
+ggarrange(f0,f1,f2)
+```
+
+```{r Plot per sample full data}
+# Plot data
+ggplot(plot_df) +
+  geom_bar(aes(x = pos, y = percentage, fill = frame), stat = "identity") +
+  scale_fill_manual(values =  c("red","forestgreen","blue")) +
+  scale_x_continuous(breaks = c(50,150),
+                     labels = c("start","stop")) +
+  scale_y_continuous(limits = c(0,0.2), 
+                     labels = percent) +
+  theme_classic() +
+  facet_wrap(~ sample_id, ncol = 4)
+
+ggsave(device = "pdf",
+       filename = "Metagene_per_sample_plot.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+
+```
+
+```{r Plot per group full data}
+# Plot data
+ggplot(plot_df) +
+  geom_bar(aes(x = pos, y = percentage, fill = frame), stat = "identity") +
+  scale_fill_manual(values =  c("red","forestgreen","blue")) +
+  scale_x_continuous(breaks = c(50,150),
+                     labels = c("start","stop")) +
+  scale_y_continuous(limits = c(0,0.65), 
+                     labels = percent) +
+  theme_classic() +
+  facet_grid(treatment ~ vector)
+
+ggsave(device = "pdf",
+       filename = "Metagene_grouped_plot.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+
+```
+
+```{r Plot per group stop zoom}
+ggplot(subset(riboseqc_treatment_df, riboseqc_treatment_df$pos %in% 140:155)) +
+  geom_bar(aes(x = pos, y = percentage, fill = frame), stat = "identity") +
+  scale_fill_manual(values =  c("red","forestgreen","blue")) +
+  scale_x_continuous(breaks = c(147),
+                     labels = c("stop")) +
+  scale_y_continuous(labels = percent) +
+  theme_classic() +
+  facet_grid(~ treatment)
+
+ggsave(device = "pdf",
+       filename = "Metagene_zoom_all_frames.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+```
+
+```{r Plot per group zoom after stop in-frame}
+ggplot(subset(riboseqc_treatment_df, riboseqc_treatment_df$pos %in% 145:200 & riboseqc_treatment_df$frame=="0")) +
+  geom_vline(xintercept = 150, col = "gray") +
+  geom_hline(yintercept = 0, col = "gray") +
+  geom_bar(aes(x = pos, y = percentage, fill = treatment), stat = "identity") +
+  scale_x_continuous(breaks = c(150),
+                     labels = c("stop")) +
+  scale_y_continuous(limits = c(0,0.0075), 
+                     labels = percent) +
+  scale_fill_manual(values =  color_scheme[c(1,3,2)]) +
+  xlab("Position relative to stop codon") +
+  ylab("Percentage of reads") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),text = element_text(size = 20)) +
+  facet_grid(~ treatment)
+
+ ggsave(device = "pdf",
+       filename = "Metagene_zoom_grouped_inframe.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+ 
+```
+
+```{r Plot per group zoom after stop in-frame}
+ggplot(subset(plot_df, plot_df$pos %in% 145:200 & plot_df$frame=="0")) +
+  geom_vline(xintercept = 150, col = "gray") +
+  geom_hline(yintercept = 0, col = "gray") +
+  geom_bar(aes(x = pos, y = percentage, fill = treatment), stat = "identity") +
+  scale_x_continuous(breaks = c(150),
+                     labels = c("stop")) +
+  scale_y_continuous(limits = c(0,0.05), 
+                     labels = percent) +
+  scale_fill_manual(values =  color_scheme[c(1,3,2)]) +
+  xlab("Position relative to stop codon") +
+  ylab("Percentage of reads") +
+  theme_bw() +
+  theme(panel.grid = element_blank(),text = element_text(size = 20)) +
+  facet_grid(~ treatment)
+
+ ggsave(device = "pdf",
+       filename = "Metagene_zoom_grouped_inframe.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+```

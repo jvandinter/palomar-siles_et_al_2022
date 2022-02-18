@@ -1,0 +1,49 @@
+Sample.ID	SeqType	Condition	Batch	group
+1	EV-1	RIBO	Untreated	Empty vector	Empty vector_Untreated
+2	EV-3	RIBO	Untreated	Empty vector	Empty vector_Untreated
+3	EV-4	RIBO	Untreated	Empty vector	Empty vector_Untreated
+4	EV-5	RIBO	Untreated	Empty vector	Empty vector_Untreated
+5	EVG418-1	RIBO	G418	Empty vector	Empty vector_G418
+6	EVG418-2	RIBO	G418	Empty vector	Empty vector_G418
+7	EVG418-4	RIBO	G418	Empty vector	Empty vector_G418
+8	EVG418-5	RIBO	G418	Empty vector	Empty vector_G418
+9	EV5FUR-1	RIBO	5FUR	Empty vector	Empty vector_5FUR
+10	EV5FUR-2	RIBO	5FUR	Empty vector	Empty vector_5FUR
+11	EV5FUR-3	RIBO	5FUR	Empty vector	Empty vector_5FUR
+12	EV5FUR-5	RIBO	5FUR	Empty vector	Empty vector_5FUR
+13	R213X-1	RIBO	Untreated	R213X	R213X_Untreated
+14	R213X-2	RIBO	Untreated	R213X	R213X_Untreated
+15	R213X-3	RIBO	Untreated	R213X	R213X_Untreated
+16	R213X-5	RIBO	Untreated	R213X	R213X_Untreated
+17	R213XG418-1	RIBO	G418	R213X	R213X_G418
+18	R213XG418-2	RIBO	G418	R213X	R213X_G418
+19	R213XG418-3	RIBO	G418	R213X	R213X_G418
+20	R213XG418-5	RIBO	G418	R213X	R213X_G418
+21	R213X5FUR-1	RIBO	5FUR	R213X	R213X_5FUR
+22	R213X5FUR-2	RIBO	5FUR	R213X	R213X_5FUR
+23	R213X5FUR-4	RIBO	5FUR	R213X	R213X_5FUR
+24	R213X5FUR-5	RIBO	5FUR	R213X	R213X_5FUR
+25	EV-1	RNA	Untreated	Empty vector	Empty vector_Untreated
+26	EV-3	RNA	Untreated	Empty vector	Empty vector_Untreated
+27	EV-4	RNA	Untreated	Empty vector	Empty vector_Untreated
+28	EV-5	RNA	Untreated	Empty vector	Empty vector_Untreated
+29	EVG418-1	RNA	G418	Empty vector	Empty vector_G418
+30	EVG418-2	RNA	G418	Empty vector	Empty vector_G418
+31	EVG418-4	RNA	G418	Empty vector	Empty vector_G418
+32	EVG418-5	RNA	G418	Empty vector	Empty vector_G418
+33	EV5FUR-1	RNA	5FUR	Empty vector	Empty vector_5FUR
+34	EV5FUR-2	RNA	5FUR	Empty vector	Empty vector_5FUR
+35	EV5FUR-3	RNA	5FUR	Empty vector	Empty vector_5FUR
+36	EV5FUR-5	RNA	5FUR	Empty vector	Empty vector_5FUR
+37	R213X-1	RNA	Untreated	R213X	R213X_Untreated
+38	R213X-2	RNA	Untreated	R213X	R213X_Untreated
+39	R213X-3	RNA	Untreated	R213X	R213X_Untreated
+40	R213X-5	RNA	Untreated	R213X	R213X_Untreated
+41	R213XG418-1	RNA	G418	R213X	R213X_G418
+42	R213XG418-2	RNA	G418	R213X	R213X_G418
+43	R213XG418-3	RNA	G418	R213X	R213X_G418
+44	R213XG418-5	RNA	G418	R213X	R213X_G418
+45	R213X5FUR-1	RNA	5FUR	R213X	R213X_5FUR
+46	R213X5FUR-2	RNA	5FUR	R213X	R213X_5FUR
+47	R213X5FUR-4	RNA	5FUR	R213X	R213X_5FUR
+48	R213X5FUR-5	RNA	5FUR	R213X	R213X_5FUR

@@ -1,0 +1,675 @@
+---
+title: "Heatmaps"
+author: "Jip van Dinter"
+date: "12/22/2021"
+output: html_document
+---
+
+This markdown generates the heatmaps for the manuscript. It loads the counts, normalises the data using DEseq2 and creates heatmap plots with the complexheatmaps package.
+
+Make sure the data_dir holds the following files:
+
+- ribo_counts
+- rna_counts (data processed as ribo)
+- andrysik gene list
+- fischer gene list
+
+```{r global variables}
+data_dir <- folder_with_counts
+save_dir <- folder_to_save_PDFs
+color_scheme <- c("#8F8F93","#FF8800","#43C1F0")
+
+rna_file <- file name for counts
+ribo_file <- file name for counts
+
+validated_genes <- c("ENSG00000026103","ENSG00000172667","ENSG00000124762",
+                    "ENSG00000105327","ENSG00000141682","ENSG00000141510",
+                    "ENSG00000087088")
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(DESeq2)
+library(tidyverse)
+library(circlize)
+library(tximport)
+library(rtracklayer)
+library(ggrepel)
+library(GGally)
+library(ggrepel)
+library(ashr)
+```
+
+## Load gene lists
+
+```{r Load gene data}
+andrysik <- read.table(file = paste(data_dir, "andrysik_gene_list.txt", sep = "/"),
+                                      header = T,
+                                      sep = "\t")
+
+fisher <- read.table(file = paste(data_dir, "fisher_gene_list.txt", sep = "/"),
+                                      header = F,
+                                      sep = "\t")
+
+```
+
+## Load metadata
+
+```{r Load metadata}
+sample_info <- read.table(file = paste0(data_dir,"/metadata.txt"),
+                          header = T,
+                          sep = "\t")
+
+# Create correct levelled factors again 
+sample_info <- data.frame("Sample ID" = sample_info$Sample.ID,
+                          SeqType = factor(c(rep("RNA",24),rep("RIBO",24)),
+                                           levels = c("RNA","RIBO")),
+                          Condition = factor(c(rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4)), 
+                                             levels = c("Untreated","G418","5FUR")),
+                          Batch = factor(c(rep("Empty vector",12),rep("R213X",12),
+                                           rep("Empty vector",12),rep("R213X",12)),
+                                         levels = c("Empty vector","R213X")))
+sample_info$group <- factor(paste(sample_info$Batch,sample_info$Condition, sep = "_"), 
+                            levels = c("Empty vector_Untreated","Empty vector_G418",
+                                       "Empty vector_5FUR","R213X_Untreated",
+                                       "R213X_G418","R213X_5FUR"))
+```
+
+### RIBO-seq
+
+```{r RIBO data load}
+ribo_count_data <- list.files(path = data_dir,
+                              pattern = ribo_file,
+                              recursive = T)
+ribo_count_df <- read.table(file = paste(data_dir,ribo_count_data,sep = "/"),
+                                   header = T)
+colnames(ribo_count_df) <- sample_info[which(sample_info$SeqType == "RIBO"),]$Sample.ID
+```
+
+### RNA-seq
+
+```{r RNA data load}
+rna_count_data <- list.files(path = data_dir,
+                              pattern = rna_file,
+                              recursive = T)
+
+rna_count_df <- read.table(file = paste(data_dir,rna_count_data,sep = "/"),
+                                   header = T)
+colnames(rna_count_df) <- sample_info[which(sample_info$SeqType == "RNA"),]$Sample.ID
+```
+
+```{r gene names}
+gtf <- import("/Users/jipvandinter/Documents/temporary_bams/transcript_filtering/Homo_sapiens.GRCh38.102.gtf")
+gene_names <- unique(as.data.frame(subset(gtf, gtf$type == "gene"))[,c(10,12)])
+```
+
+```{r DEseq}
+dds <- DESeqDataSetFromMatrix(
+  countData = cbind(rna_count_df,ribo_count_df),
+  colData = sample_info,
+  design = ~ group + SeqType + group:SeqType
+    )
+
+vsd <- vst(dds)
+```
+
+```{r RIBO significant genes}
+dds_ribo <- DESeqDataSetFromMatrix(
+  countData = ribo_count_df,
+  colData = sample_info[which(sample_info$SeqType == "RIBO"),],
+  design = ~ group
+  )
+# Treatments
+dds_ribo <- DESeq(dds_ribo)
+
+# R213X untreated vs treated
+res_ribo_5fur_rx = results(dds_ribo, contrast = c("group","R213X_5FUR","R213X_Untreated"))
+res_ribo_g418_rx = results(dds_ribo, contrast = c("group","R213X_G418","R213X_Untreated"))
+
+# shrinkage
+res_ribo_5fur_rx = lfcShrink(dds = dds_ribo, 
+                             contrast = c("group","R213X_5FUR","R213X_Untreated"),
+                             res = res_ribo_5fur_rx,
+                             type = "ashr")
+res_ribo_g418_rx = lfcShrink(dds = dds_ribo, 
+                             contrast = c("group","R213X_G418","R213X_Untreated"),
+                             res = res_ribo_g418_rx,
+                             type = "ashr")
+
+# Subset on significant genes
+sig_5fur <- rownames(res_ribo_5fur_rx[which(res_ribo_5fur_rx$log2FoldChange > 1 & res_ribo_5fur_rx$padj < 0.05),])
+sig_g418 <- rownames(res_ribo_g418_rx[which(res_ribo_g418_rx$log2FoldChange > 1 & res_ribo_g418_rx$padj < 0.05),])
+
+# Subset on treatment-specific genes
+only_5fur <- sig_5fur[!(sig_5fur %in% sig_g418)] 
+only_g418 <- sig_g418[!(sig_g418 %in% sig_5fur)]
+only_both <- sig_5fur[sig_5fur %in% sig_g418]
+
+# Convert to gene names
+names_5fur <- gene_names[match(only_5fur, gene_names$gene_id ),]$gene_name
+names_g418 <- gene_names[match(only_g418, gene_names$gene_id ),]$gene_name
+names_both <- gene_names[match(only_both, gene_names$gene_id ),]$gene_name
+
+# Subset on andrysik's list
+andrysik_5fur <- names_5fur[names_5fur %in% andrysik$gene_name]
+andrysik_g418 <- names_g418[names_g418 %in% andrysik$gene_name]
+andrysik_both <- names_both[names_both %in% andrysik$gene_name]
+
+# Subset on fischer's list
+fischer_5fur <- names_5fur[names_5fur %in% fischer$V1]
+fischer_g418 <- names_g418[names_g418 %in% fischer$V1]
+fischer_both <- names_both[names_both %in% fischer$V1]
+
+combined <- data.frame(gene_name = unique(c(fischer$V1,andrysik$gene_name)))
+
+#Subset on combined list
+combined_5fur <- names_5fur[names_5fur %in% combined$gene_name]
+combined_g418 <- names_g418[names_g418 %in% combined$gene_name]
+combined_both <- names_both[names_both %in% combined$gene_name]
+
+andrysik$significant <- ifelse(andrysik$gene_name %in% andrysik_5fur, "5FUR",
+                               ifelse(andrysik$gene_name %in% andrysik_g418, "G418",
+                                      ifelse(andrysik$gene_name %in% andrysik_both, "both", "ns")))
+
+fischer$significant <- ifelse(fischer$V1 %in% fischer_5fur, "5FUR",
+                               ifelse(fischer$V1 %in% fischer_g418, "G418",
+                                      ifelse(fischer$V1 %in% fischer_both, "both", "ns")))
+
+combined$significant <- ifelse(combined$gene_name %in% combined_5fur, "5FUR",
+                               ifelse(combined$gene_name %in% combined_g418, "G418",
+                                      ifelse(combined$gene_name %in% combined_both, "both", "ns")))
+
+```
+
+```{r heatmap annotation}
+# Make annotation data.frame
+df <- as.data.frame(colData(dds)[c(13:24,37:48),c("Condition","SeqType")])
+rownames(df) <- paste(colnames(dds)[c(13:24,37:48)],df$SeqType, sep = "_")
+
+df$Condition <- factor(df$Condition, levels = c("Untreated","G418","5FUR"))
+df$SeqType <- factor(df$SeqType, levels = c("RNA","RIBO"))
+
+# Set annotation colors
+anno_cols <- list(Condition = setNames(color_scheme,
+                                       levels(df$Condition)),
+                  SeqType = setNames(c("#009E73","#0072B2"),
+                                     levels(df$SeqType)))
+# Make heatmap annotation
+ha_ut <- HeatmapAnnotation(df = df[c(1:4,13:16),], 
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+ha_g418 <- HeatmapAnnotation(df = df[c(5:8,17:20),], 
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+ha_5fur <- HeatmapAnnotation(df = df[c(9:12,21:24),], 
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+# Colours
+my_col <- colorRampPalette(rev(brewer.pal(n = 6, name = "RdYlBu")))(100)
+breaks <- seq(-3, 3, length.out = 100)
+```
+
+```{r save z-scores}
+zscore_mat <- t(scale(t(assay(vsd))))
+zscore_mat <- zscore_mat[complete.cases(zscore_mat),]
+colnames(zscore_mat) <- c(paste("RNA",colnames(zscore_mat)[1:24], sep = "-"),
+                          paste("RIBO",colnames(zscore_mat)[1:24], sep = "-"))
+write.table(zscore_mat, file = paste(save_dir,"sequence_zscores.txt",sep = "/"), 
+            sep = ";", row.names = T, quote = F, dec = ",")
+```
+
+```{r qPCR}
+# Run this code snippet for qPCR genes in the heatmap data
+plot_name <- paste(save_dir,"R213X_heatmap_split_qPCR.pdf", sep = "/")
+heatmap <- t(scale(t(assay(vsd))))
+
+# untreated
+heatmap_untreated <- heatmap[rownames(heatmap) %in% validated_genes,c(13:16,37:40)]
+rownames(heatmap_untreated) <- gene_names[match(rownames(heatmap_untreated), gene_names$gene_id ),]$gene_name
+
+# G418
+heatmap_g418 <- heatmap[rownames(heatmap) %in% validated_genes,c(17:20,41:44)]
+rownames(heatmap_g418) <- gene_names[match(rownames(heatmap_g418), gene_names$gene_id ),]$gene_name
+
+# 5FUR
+heatmap_5fur <- heatmap[rownames(heatmap) %in% validated_genes,c(21:24,45:48)]
+rownames(heatmap_5fur) <- gene_names[match(rownames(heatmap_5fur), gene_names$gene_id ),]$gene_name
+
+pdf(plot_name,
+         width = 11.7,
+         height = 8.3)
+
+ht_ut <- Heatmap(heatmap_untreated,
+              top_annotation = ha_ut,
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = T,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              col = colorRamp2(breaks, my_col),
+              heatmap_legend_param = list(legend_direction = "horizontal", 
+                                          title_position = "topcenter", 
+                                          legend_width = unit(10, "line"),
+                                          title = "Gene Z-scores"),
+              column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+              column_names_gp = gpar(fontsize = 8),
+              column_gap = unit(1, "mm"))
+
+ht_g418 <- Heatmap(heatmap_g418,
+              top_annotation = ha_g418,
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = T,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              show_heatmap_legend = F,
+              column_title = "qPCR Validated Genes in R213X", 
+              column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+              column_names_gp = gpar(fontsize = 8),
+              col = colorRamp2(breaks, my_col),
+              column_gap = unit(1, "mm"))
+
+ht_5fur <- Heatmap(heatmap_5fur,
+              top_annotation = ha_5fur,
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = T,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              show_heatmap_legend = F,
+              col = colorRamp2(breaks, my_col),
+              column_gap = unit(1, "mm"))
+
+draw(ht_ut + ht_g418 + ht_5fur, heatmap_legend_side = "bottom", annotation_legend_side = "right", legend_grouping = "original")  
+
+dev.off()
+```
+
+```{r combined gene list}
+# Run this code snippet for both gene lists in the heatmap data
+plot_name <- paste(save_dir,"R213X_heatmap_combined.pdf", sep = "/")
+heatmap <- t(scale(t(assay(vsd))))
+rownames(heatmap) <- gene_names[match(rownames(heatmap), gene_names$gene_id ),]$gene_name
+
+# untreated
+heatmap_untreated <- heatmap[rownames(heatmap) %in% combined$gene_name,c(13:16,37:40)]
+heatmap_untreated <- heatmap_untreated[ order(rownames(heatmap_untreated)) , , drop = F]
+
+# G418
+heatmap_g418 <- heatmap[rownames(heatmap) %in% combined$gene_name,c(17:20,41:44)]
+heatmap_g418 <- heatmap_g418[ order(rownames(heatmap_g418)) , , drop = F]
+
+# 5FUR
+heatmap_5fur <- heatmap[rownames(heatmap) %in% combined$gene_name,c(21:24,45:48)]
+heatmap_5fur <- heatmap_5fur[ order(rownames(heatmap_5fur)) , , drop = F]
+
+# Correct clustering of annotations (RNA before Ribo)
+heatmap_5fur <- heatmap_5fur[,c(5,6,7,8,4,2,3,1)]
+
+# Create row annotations
+df_row <- data.frame(Significant = subset(combined, combined$gene_name %in% rownames(heatmap_untreated))$significant)
+df_row$Significant <- factor(df_row$Significant, levels = c("ns","G418","5FUR","both"))
+rownames(df_row) <- subset(combined, combined$gene_name %in% rownames(heatmap))$gene_name
+df_row <- df_row[ order(rownames(df_row)), , drop = F]
+# Set annotation colors
+sig_cols <- c("black",color_scheme[2:3],"#9EAA75")
+
+anno_rows <- list(Significant = setNames(sig_cols,
+                                         levels(df_row$Significant)))
+
+ra <- HeatmapAnnotation(df = df_row,
+                        which = "row",
+                        col = anno_rows,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+# Change width and height based on height and width units per heatmap. See "Calculate area for PDF"
+pdf(plot_name,
+         width = 7,
+         height = 15)
+
+ht_ut <- Heatmap(heatmap_untreated,
+              top_annotation = ha_ut,
+              left_annotation = ra,
+              height = nrow(heatmap_untreated)*unit(2, "mm"),
+              width = ncol(heatmap_untreated)*unit(5, "mm"),
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = F,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              split = df_row,
+              row_title_rot = 0,
+              row_title_gp = gpar(fontsize = 8, fontface = "bold"),
+              col = colorRamp2(breaks, my_col),
+              heatmap_legend_param = list(legend_direction = "horizontal", 
+                                          title_position = "topcenter", 
+                                          legend_width = unit(10, "line"),
+                                          title = "Gene Z-scores"),
+              column_gap = unit(1, "mm"))
+
+ht_g418 <- Heatmap(heatmap_g418,
+              top_annotation = ha_g418,
+              height = nrow(heatmap_g418)*unit(2, "mm"),
+              width = ncol(heatmap_g418)*unit(5, "mm"),
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = T,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              col = colorRamp2(breaks, my_col),
+              show_heatmap_legend = F,
+              column_title = "Combined gene list in R213X", 
+              column_title_gp = gpar(fontsize = 8, fontface = "bold"),
+              column_names_gp = gpar(fontsize = 6),
+              row_names_gp = gpar(fontsize = 6),
+              column_gap = unit(1, "mm"))
+
+ht_5fur <- Heatmap(heatmap_5fur,
+              top_annotation = ha_5fur,
+              right_annotation = ra,
+              height = nrow(heatmap_5fur)*unit(2, "mm"),
+              width = ncol(heatmap_5fur)*unit(5, "mm"),
+              cluster_columns = F,
+              cluster_rows = T, 
+              show_row_names = F,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              col = colorRamp2(breaks, my_col),
+              show_heatmap_legend = F,
+              row_names_gp = gpar(fontsize = 6),
+              column_gap = unit(1, "mm"))
+
+ht <- draw(ht_ut + ht_g418 + ht_5fur, heatmap_legend_side = "bottom", annotation_legend_side = "right", legend_grouping = "original")  
+
+# Check heatmap clustering
+column_order(ht_5fur)
+
+# Calculate area for PDF
+w = ComplexHeatmap:::width(ht)
+w = convertX(w, "inch", valueOnly = TRUE)
+h = ComplexHeatmap:::height(ht)
+h = convertY(h, "inch", valueOnly = TRUE)
+
+dev.off()
+
+```
+
+```{r Andrysik gene list}
+# Run this code snippet for Andrysik validated genes in the heatmap data
+plot_name <- paste(save_dir,"R213X_heatmap_Andrysik.pdf", sep = "/")
+heatmap <- t(scale(t(assay(vsd))))
+rownames(heatmap) <- gene_names[match(rownames(heatmap), gene_names$gene_id ),]$gene_name
+
+# untreated
+heatmap_untreated <- heatmap[rownames(heatmap) %in% andrysik$gene_name,c(13:16,37:40)]
+heatmap_untreated <- heatmap_untreated[ order(rownames(heatmap_untreated)) , , drop = F]
+
+# G418
+heatmap_g418 <- heatmap[rownames(heatmap) %in% andrysik$gene_name,c(17:20,41:44)]
+heatmap_g418 <- heatmap_g418[ order(rownames(heatmap_g418)) , , drop = F]
+
+# 5FUR
+heatmap_5fur <- heatmap[rownames(heatmap) %in% andrysik$gene_name,c(21:24,45:48)]
+heatmap_5fur <- heatmap_5fur[ order(rownames(heatmap_5fur)) , , drop = F]
+
+# Reorder 5FUR so that RNA is before RIBO
+heatmap_5fur <- heatmap_5fur[,c(4,2,3,1,5,6,8,7)]
+
+# Make annotation data.frame
+df <- as.data.frame(colData(dds)[c(13:24,37:48),c("Condition","SeqType")])
+rownames(df) <- paste(colnames(dds)[c(13:24,37:48)],df$SeqType, sep = "_")
+
+df$Condition <- factor(df$Condition, levels = c("Untreated","G418","5FUR"))
+df$SeqType <- factor(df$SeqType, levels = c("RNA","RIBO"))
+
+df_row <- data.frame(Significant = subset(andrysik, andrysik$gene_name %in% rownames(heatmap))$significant)
+df_row$Significant <- factor(df_row$Significant, levels = c("ns","G418","5FUR","both"))
+rownames(df_row) <- subset(andrysik, andrysik$gene_name %in% rownames(heatmap))$gene_name
+df_row <- df_row[ order(rownames(df_row)) , ,drop = F]
+
+# Set annotation colors
+area_cols <- c("#999999","#E69F00","#9EAA75", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7","#668C8D","#6B6859")
+sig_cols <- c("black",color_scheme[2:3],"#9EAA75")
+
+anno_cols <- list(Condition = setNames(color_scheme,
+                                       levels(df$Condition)),
+                  SeqType = setNames(c("#009E73","#0072B2"),
+                                     levels(df$SeqType)))
+anno_rows <- list(Significant = setNames(sig_cols,
+                                         levels(df_row$Significant)))
+
+# Make heatmap annotation
+ha_ut <- HeatmapAnnotation(df = df[c(1:4,13:16),], 
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F,
+                        annotation_legend_param = list(grid_height = unit(0.3, "cm"),
+                                                       labels_gp = gpar(fontsize = 8)),
+                        simple_anno_size = unit(0.3, "cm"))
+ha_g418 <- HeatmapAnnotation(df = df[c(5:8,17:20),], 
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        annotation_legend_param = list(grid_height = unit(0.3, "cm"),
+                                                       labels_gp = gpar(fontsize = 8)),
+                        simple_anno_size = unit(0.3, "cm"))
+
+ha_5fur <- HeatmapAnnotation(df = df[c(9:12,21:24),],
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        annotation_legend_param = list(grid_height = unit(0.3, "cm"),
+                                                       labels_gp = gpar(fontsize = 8)),
+                        simple_anno_size = unit(0.3, "cm"))
+
+ra <- HeatmapAnnotation(df = df_row,
+                        which = "row",
+                        col = anno_rows,
+                        show_annotation_name = F, 
+                        show_legend = c(FALSE, TRUE),
+                        annotation_legend_param = list(grid_height = unit(0.3, "cm"),
+                                                       labels_gp = gpar(fontsize = 8)),
+                        simple_anno_size = unit(0.3, "cm"))
+
+# Change width and height based on height and width units per heatmap. See "Calculate area for PDF"
+pdf(plot_name,
+         width = 8,
+         height = 13)
+
+ht_ut <- Heatmap(heatmap_untreated,
+              top_annotation = ha_ut,
+              left_annotation = ra,
+              height = nrow(heatmap_untreated)*unit(3, "mm"),
+              width = ncol(heatmap_untreated)*unit(5, "mm"),
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = F,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              split = df_row$Area,
+              row_title_rot = 0,
+              row_title_gp = gpar(fontsize = 8, fontface = "bold"),
+              col = colorRamp2(breaks, my_col),
+              heatmap_legend_param = list(legend_direction = "horizontal", 
+                                          title_position = "topcenter", 
+                                          title = "Gene Z-scores",
+                                          legend_label_gp = gpar(fontsize = 5)),
+
+              row_names_gp = gpar(fontsize = 5),
+              column_gap = unit(1, "mm"))
+
+ht_g418 <- Heatmap(heatmap_g418,
+              top_annotation = ha_g418,
+              height = nrow(heatmap_g418)*unit(3, "mm"),
+              width = ncol(heatmap_g418)*unit(5, "mm"),
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = F,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              col = colorRamp2(breaks, my_col),
+              split = df_row$Area,
+              show_heatmap_legend = F,
+              column_title = "Gene groups from Andrysik et al. in R213X", 
+              column_title_gp = gpar(fontsize = 8, fontface = "bold"),
+              column_names_gp = gpar(fontsize = 6),
+              column_gap = unit(1, "mm"))
+
+ht_5fur <- Heatmap(heatmap_5fur,
+              top_annotation = ha_5fur,
+              height = nrow(heatmap_5fur)*unit(3, "mm"),
+              width = ncol(heatmap_5fur)*unit(5, "mm"),
+              cluster_columns = F,
+              cluster_rows = T, 
+              show_row_names = T,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              split = df_row$Area,
+              col = colorRamp2(breaks, my_col),
+              show_heatmap_legend = F,
+              row_names_gp = gpar(fontsize = 6),
+              column_gap = unit(1, "mm"))
+
+
+ht <- draw(ht_ut + ht_g418 + ht_5fur, heatmap_legend_side = "bottom", annotation_legend_side = "right", legend_grouping = "original")  
+
+# Calculate area for PDF
+w = ComplexHeatmap:::width(ht)
+w = convertX(w, "inch", valueOnly = TRUE)
+h = ComplexHeatmap:::height(ht)
+h = convertY(h, "inch", valueOnly = TRUE)
+
+dev.off()
+
+```
+
+```{r fischer gene list}
+# Run this code snippet for fischer validated genes in the heatmap data
+plot_name <- paste(save_dir,"R213X_heatmap_fischer.pdf", sep = "/")
+heatmap <- t(scale(t(assay(vsd))))
+rownames(heatmap) <- gene_names[match(rownames(heatmap), gene_names$gene_id ),]$gene_name
+
+# untreated
+heatmap_untreated <- heatmap[rownames(heatmap) %in% fischer$V1,c(13:16,37:40)]
+heatmap_untreated <- heatmap_untreated[ order(rownames(heatmap_untreated)) , , drop = F]
+
+# G418
+heatmap_g418 <- heatmap[rownames(heatmap) %in% fischer$V1,c(17:20,41:44)]
+heatmap_g418 <- heatmap_g418[ order(rownames(heatmap_g418)) , , drop = F]
+
+# 5FUR
+heatmap_5fur <- heatmap[rownames(heatmap) %in% fischer$V1,c(21:24,45:48)]
+heatmap_5fur <- heatmap_5fur[ order(rownames(heatmap_5fur)) , , drop = F]
+
+# Correct clustering of annotations (RNA before RIBO)
+heatmap_5fur <- heatmap_5fur[,c(4,3,2,1,8,6,7,5)]
+heatmap_g418 <- heatmap_g418[,c(1,4,3,2,6,8,5,7)]
+
+# Create row annotations
+df_row <- data.frame(Significant = subset(fischer, fischer$V1 %in% rownames(heatmap_untreated))$significant)
+df_row$Significant <- factor(df_row$Significant, levels = c("ns","G418","5FUR","both"))
+rownames(df_row) <- subset(fischer, fischer$V1 %in% rownames(heatmap_untreated))$V1
+df_row <- df_row[ order(rownames(df_row)), , drop = F]
+
+# Set annotation colors
+sig_cols <- c("black",color_scheme[2:3],"#9EAA75")
+
+anno_rows <- list(Significant = setNames(sig_cols,
+                                         levels(df_row$Significant)))
+
+ra <- HeatmapAnnotation(df = df_row,
+                        which = "row",
+                        col = anno_rows,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+# Change width and height based on height and width units per heatmap. See "Calculate area for PDF"
+pdf(plot_name,
+         width = 8,
+         height = 15)
+
+ht_ut <- Heatmap(heatmap_untreated,
+              top_annotation = ha_ut,
+              left_annotation = ra,
+              height = nrow(heatmap_untreated)*unit(3, "mm"),
+              width = ncol(heatmap_untreated)*unit(5, "mm"),
+              cluster_columns = T,
+              cluster_rows = T, 
+              show_row_names = F,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              split = df_row,
+              row_title_rot = 0,
+              row_title_gp = gpar(fontsize = 8, fontface = "bold"),
+              col = colorRamp2(breaks, my_col),
+              heatmap_legend_param = list(legend_direction = "horizontal", 
+                                          title_position = "topcenter", 
+                                          legend_width = unit(10, "line"),
+                                          title = "Gene Z-scores"),
+              column_gap = unit(1, "mm"))
+
+ht_g418 <- Heatmap(heatmap_g418,
+              top_annotation = ha_g418,
+              height = nrow(heatmap_g418)*unit(3, "mm"),
+              width = ncol(heatmap_g418)*unit(5, "mm"),
+              cluster_columns = F,
+              cluster_rows = T, 
+              show_row_names = T,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              col = colorRamp2(breaks, my_col),
+              show_heatmap_legend = F,
+              column_title = "Gene list from fischer et al. in R213X", 
+              column_title_gp = gpar(fontsize = 8, fontface = "bold"),
+              column_names_gp = gpar(fontsize = 6),
+              row_names_gp = gpar(fontsize = 6),
+              column_gap = unit(1, "mm"))
+
+ht_5fur <- Heatmap(heatmap_5fur,
+              top_annotation = ha_5fur,
+              right_annotation = ra,
+              height = nrow(heatmap_5fur)*unit(3, "mm"),
+              width = ncol(heatmap_5fur)*unit(5, "mm"),
+              cluster_columns = F,
+              cluster_rows = T, 
+              show_row_names = T,
+              show_row_dend = F,
+              show_column_names = F,
+              show_column_dend = F,
+              col = colorRamp2(breaks, my_col),
+              show_heatmap_legend = F,
+              row_names_gp = gpar(fontsize = 6),
+              column_gap = unit(1, "mm"))
+
+draw(ht_ut + ht_g418 + ht_5fur, heatmap_legend_side = "bottom", annotation_legend_side = "right", legend_grouping = "original")  
+# Calculate area for PDF
+w = ComplexHeatmap:::width(ht)
+w = convertX(w, "inch", valueOnly = TRUE)
+h = ComplexHeatmap:::height(ht)
+h = convertY(h, "inch", valueOnly = TRUE)
+
+dev.off()
+```

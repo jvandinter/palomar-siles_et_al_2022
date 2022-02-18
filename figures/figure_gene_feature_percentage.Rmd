@@ -1,0 +1,86 @@
+---
+title: "Metagene_coding_region_plots"
+author: "Jip van Dinter"
+date: "12/13/2021"
+output: html_document
+---
+
+This RMD shows how to generate coding region feature percentage plots from the RIBOseQC data.This script requires output from RiboseQC as input.
+
+```{r Libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+```
+
+```{r Global Variables}
+data_dir <- RIBOseqc Rdata file folder
+save_dir <- save_dir
+color_scheme <- c("#8F8F93","#43C1F0","#FF8800")
+```
+
+```{r Plot Percentage plot}
+file_list <- list.files(path = data_dir, pattern = "*._results_RiboseQC$", recursive = T)
+
+# Gather data from R data files
+sample_dfs <- list()
+
+for (i in seq_along(file_list)) {
+  
+  sample_file = file_list[i]
+  # Get Sample ID from name
+  sample_id = sub(".*H1299-","",sample_file)
+  sample_id = sub("_results.*","",sample_id)
+  
+  print(paste("Parsing", sample_id, sep = " "))
+  
+  # Load R data
+  load(file = paste(data_dir, sample_file, sep = "/"))
+  
+  # Grab only features of interest
+  df <- t(as.data.frame(res_all$read_stats$reads_summary[[1]]))
+  sums <- colSums(df)
+  df_sums <- as.data.frame(t(sums))
+  total_sums <- sum(df_sums[,1:3])
+  # Calculate percentages
+  cds_percentage <- df_sums$cds / total_sums
+  utr5_percentage <- df_sums$fiveutrs / total_sums
+  utr3_percentage <- df_sums$threeutrs / total_sums
+  
+  # Parse info into DF
+  df_sample <- data.frame(percentage = c(utr5_percentage,cds_percentage, utr3_percentage),
+                          sample_id = sample_id,
+                          feature = factor(c("5_prime_utr","CDS","3_prime_utr"), 
+                                levels = c("5_prime_utr","CDS","3_prime_utr")),
+                          vector = ifelse(grepl("EV", rep(sample_id,3)),
+                                                 "EV",
+                                                 "R213X"),
+                            treatment = factor(ifelse(grepl("G418", rep(sample_id,3)),
+                                                "G418",
+                                                ifelse(grepl("5FUR",rep(sample_id,3)),
+                                                       "5FUR",
+                                                       "NT")),
+                                               levels = c("NT","5FUR","G418")))
+  sample_dfs[[sample_id]] <- df_sample
+}
+
+# Combine the list of DFs
+plot_df <- do.call("rbind",sample_dfs)
+
+# Plot the data
+ggplot(data = plot_df) +
+  geom_bar(aes(x = feature, y = percentage, 
+                   fill = treatment, group = sample_id),stat="identity",position="dodge" ) +
+  scale_y_continuous(limits = c(0,1),
+                     breaks = c(0,0.25,0.5,0.75,1),
+                     labels = c("0%","25%","50%","75%","100%")) +
+  scale_x_discrete(labels = c("5' UTR",'CDS',"3' UTR")) +
+  scale_fill_manual(values = color_scheme) +
+  theme_classic() +
+  facet_grid(~ vector)
+
+# Save plot as PDF
+ggsave(device = "pdf",
+       filename = "Coding_regions_percentage_plot.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+```

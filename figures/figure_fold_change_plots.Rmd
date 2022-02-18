@@ -1,0 +1,678 @@
+---
+title: "fc_fc_figures"
+author: "Jip van Dinter"
+date: "11/4/2021"
+output: html_document
+---
+
+# RIBO-seq vs RNA-seq Correlation
+
+How are particular genes impacted regarding translation and transcription?
+
+Keep overlap are the genes RNA-seq and RIBO-seq have in common regarding expression. These genes have the low filter criteria of (RowSum(gene) > 10) counts for both RNA-seq and RIBO-seq. 
+
+data_dir requires the following files:
+- RIBO count matrix
+- RNA count matrix
+- keep_overlaps.txt
+- Any reference GTF you would like to use to annotate gene names
+
+```{r global variables}
+data_dir <- data_folder
+save_dir <- save_folder
+reference_gtf <- ensembl_102.gtf
+color_scheme <- c("#929292FF","#71ACDEFF","#F49739FF")
+
+cols <- c("black",area_cols[c(7,8,9)])
+
+rna_file <- file name for counts
+ribo_file <- file name for counts
+
+validated_genes <- c("ENSG00000026103","ENSG00000172667","ENSG00000124762",
+                    "ENSG00000105327","ENSG00000141682",
+                    "ENSG00000087088")
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(DESeq2)
+library(tidyverse)
+library(tximport)
+library(rtracklayer)
+library(ggrepel)
+library(ggpubr)
+library(GGally)
+library(ggplot2)
+library(ggrepel)
+library(ashr)
+```
+
+# Load in the data
+
+## Load gene data
+
+```{r}
+
+keep_overlap <- read.table(file = paste(data_dir, "keep_overlap.txt", sep = "/"),
+                                      header = T,
+                                      sep = ",")
+
+andrysik <- read.table(file = paste(data_dir, "andrysik_gene_list.txt", sep = "/"),
+                                      header = T,
+                                      sep = "\t")
+
+fischer <- read.table(file = paste(data_dir, "fischer_gene_list.txt", sep = "/"),
+                                      header = F,
+                                      sep = "\t")
+
+```
+
+## Load metadata
+
+```{r Load metadata}
+sample_info <- read.table(file = paste0(data_dir,"/metadata.txt"),
+                          header = T,
+                          sep = "\t")
+
+# Create correct levelled factors again 
+sample_info <- data.frame("Sample ID" = sample_info$Sample.ID,
+                          SeqType = factor(c(rep("RIBO",24),rep("RNA",24)),
+                                           levels = c("RNA","RIBO")),
+                          Condition = factor(c(rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4)), 
+                                             levels = c("Untreated","G418","5FUR")),
+                          Batch = factor(c(rep("Empty vector",12),rep("R213X",12),
+                                           rep("Empty vector",12),rep("R213X",12)),
+                                         levels = c("Empty vector","R213X")))
+sample_info$group <- factor(paste(sample_info$Batch,sample_info$Condition, sep = "_"), 
+                            levels = c("Empty vector_Untreated","Empty vector_G418",
+                                       "Empty vector_5FUR","R213X_Untreated",
+                                       "R213X_G418","R213X_5FUR"))
+```
+
+### RIBO-seq
+
+```{r RIBO data load}
+ribo_count_data <- list.files(path = data_dir,
+                              pattern = ribo_file,
+                              recursive = T)
+ribo_count_df <- read.table(file = paste(data_dir,ribo_count_data,sep = "/"),
+                                   header = T)
+colnames(ribo_count_df) <- sample_info[which(sample_info$SeqType == "RIBO"),]$Sample.ID
+```
+
+### RNA-seq
+
+```{r RNA data load}
+rna_count_data <- list.files(path = data_dir,
+                              pattern = rna_file,
+                              recursive = T)
+
+rna_count_df <- read.table(file = paste(data_dir,rna_count_data,sep = "/"),
+                                   header = T)
+colnames(rna_count_df) <- sample_info[which(sample_info$SeqType == "RNA"),]$Sample.ID
+```
+
+## Create DEseq matrix
+
+### Total
+Create DESeq2 object for the combined dataset of Ribo-seq and RNA-seq counts.
+
+```{r DEseq}
+dds <- DESeqDataSetFromMatrix(
+  countData = cbind(ribo_count_df,rna_count_df),
+  colData = sample_info,
+  design = ~ group + SeqType + group:SeqType
+    )
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep_overlap$x,]
+dds <- DESeq(dds)
+resultsNames(dds)
+
+# EV 5FUR vs EV Untreated, RIBO vs RNA
+res_5fur_ev = results(dds, contrast = list(c("groupEmpty.vector_5FUR.SeqTypeRIBO","SeqType_RIBO_vs_RNA")))
+res_g418_ev = results(dds, contrast = list(c("groupEmpty.vector_G418.SeqTypeRIBO","SeqType_RIBO_vs_RNA")))
+# R213X untreated vs treated
+res_5fur_rx = results(dds, contrast = list(c("groupR213X_5FUR.SeqTypeRIBO","groupR213X_Untreated.SeqTypeRIBO")))
+res_g418_rx = results(dds, contrast = list(c("groupR213X_G418.SeqTypeRIBO","groupR213X_Untreated.SeqTypeRIBO")))
+# Treatments
+res_5fur = results(dds, contrast = list(c("groupR213X_5FUR.SeqTypeRIBO","groupEmpty.vector_5FUR.SeqTypeRIBO")))
+res_g418 = results(dds, contrast = list(c("groupR213X_G418.SeqTypeRIBO","groupEmpty.vector_G418.SeqTypeRIBO")))
+```
+
+### RNA
+Run DESeq2 for mRNA counts in order to obtain DTGs.
+
+```{r Deseq RNA}
+dds_rna <- DESeqDataSetFromMatrix(
+  countData = rna_count_df,
+  colData = sample_info[which(sample_info$SeqType == "RNA"),],
+  design = ~ group
+    )
+
+keep_rna <- rowSums(counts(dds_rna)) >= 10
+dds_rna <- dds_rna[keep_overlap$x,]
+dds_rna <- DESeq(dds_rna)
+
+resultsNames(dds_rna)
+# EV untreated vs treated
+res_rna_5fur_ev = results(dds_rna, name =  "group_Empty.vector_5FUR_vs_Empty.vector_Untreated")
+res_rna_g418_ev = results(dds_rna, name = "group_Empty.vector_G418_vs_Empty.vector_Untreated")
+# R213X untreated vs treated
+res_rna_5fur_rx = results(dds_rna, contrast = c("group","R213X_5FUR","R213X_Untreated"))
+res_rna_g418_rx = results(dds_rna, contrast = c("group","R213X_G418","R213X_Untreated"))
+# Treatments
+res_rna_5fur = results(dds_rna, contrast = c("group","R213X_5FUR","Empty.vector_5FUR"))
+res_rna_g418 = results(dds_rna, contrast = c("group","R213X_G418","Empty.vector_G418"))
+
+# Perform shrinkage using ashr
+res_rna_5fur_ev = lfcShrink(dds = dds_rna, 
+                             contrast = "group_Empty.vector_5FUR_vs_Empty.vector_Untreated",
+                             res = res_rna_5fur_ev,
+                             type = "ashr")
+res_rna_g418_ev = lfcShrink(dds = dds_rna, 
+                             contrast = "group_Empty.vector_G418_vs_Empty.vector_Untreated",
+                             res = res_rna_g418_ev,
+                             type = "ashr")
+res_rna_5fur_rx = lfcShrink(dds = dds_rna, 
+                             contrast = c("group","R213X_5FUR","R213X_Untreated"),
+                             res = res_rna_5fur_rx,
+                             type = "ashr")
+res_rna_g418_rx = lfcShrink(dds = dds_rna, 
+                             contrast = c("group","R213X_G418","R213X_Untreated"),
+                             res = res_rna_g418_rx,
+                             type = "ashr")
+res_rna_5fur = lfcShrink(dds = dds_rna, 
+                             contrast = c("group","R213X_5FUR","Empty.vector_5FUR"),
+                             res = res_rna_5fur,
+                             type = "ashr")
+res_rna_g418 = lfcShrink(dds = dds_rna, 
+                             contrast = c("group","R213X_G418","Empty.vector_G418"),
+                             res = res_rna_g418,
+                             type = "ashr")
+```
+
+### RIBO
+Run DESeq2 for RPFs (Ribo-seq counts)
+
+```{r DEseq RIBO}
+dds_ribo <- DESeqDataSetFromMatrix(
+  countData = ribo_count_df,
+  colData = sample_info[which(sample_info$SeqType == "RIBO"),],
+  design = ~ group
+    )
+
+keep_ribo <- rowSums(counts(dds_ribo)) >= 10
+dds_ribo <- dds_ribo[keep_overlap$x,]
+
+dds_ribo <- DESeq(dds_ribo)
+
+resultsNames(dds_ribo)
+# EV untreated vs treated
+res_ribo_5fur_ev = results(dds_ribo, name = "group_Empty.vector_5FUR_vs_Empty.vector_Untreated")
+res_ribo_g418_ev = results(dds_ribo, name = "group_Empty.vector_G418_vs_Empty.vector_Untreated")
+# R213X untreated vs treated
+res_ribo_5fur_rx = results(dds_ribo, contrast = c("group","R213X_5FUR","R213X_Untreated"))
+res_ribo_g418_rx = results(dds_ribo, contrast = c("group","R213X_G418","R213X_Untreated"))
+# Treatments
+res_ribo_5fur = results(dds_ribo, contrast = c("group","R213X_5FUR","Empty.vector_5FUR"))
+res_ribo_g418 = results(dds_ribo, contrast = c("group","R213X_G418","Empty.vector_G418"))
+
+# Perform shrinkage using ashr
+res_ribo_5fur_ev = lfcShrink(dds = dds_ribo, 
+                             contrast = "group_Empty.vector_5FUR_vs_Empty.vector_Untreated",
+                             res = res_ribo_5fur_ev,
+                             type = "ashr")
+res_ribo_g418_ev = lfcShrink(dds = dds_ribo, 
+                             contrast = "group_Empty.vector_G418_vs_Empty.vector_Untreated",
+                             res = res_ribo_g418_ev,
+                             type = "ashr")
+res_ribo_5fur_rx = lfcShrink(dds = dds_ribo, 
+                             contrast = c("group","R213X_5FUR","R213X_Untreated"),
+                             res = res_ribo_5fur_rx,
+                             type = "ashr")
+res_ribo_g418_rx = lfcShrink(dds = dds_ribo, 
+                             contrast = c("group","R213X_G418","R213X_Untreated"),
+                             res = res_ribo_g418_rx,
+                             type = "ashr")
+res_ribo_5fur = lfcShrink(dds = dds_ribo, 
+                             contrast = c("group","R213X_5FUR","Empty.vector_5FUR"),
+                             res = res_ribo_5fur,
+                             type = "ashr")
+res_ribo_g418 = lfcShrink(dds = dds_ribo, 
+                             contrast = c("group","R213X_G418","Empty.vector_G418"),
+                             res = res_ribo_g418,
+                             type = "ashr")
+```
+
+### Load Downstream targets of TP53
+
+```{r tp53 downstream targets}
+gtf <- import(paste(data_dir, reference_gtf, sep = "/"))
+gene_names <- unique(as.data.frame(subset(gtf, gtf$type == "gene"))[,c(10,12)])
+
+# Create DFs for connecting gene ID to gene name
+validated_genes <- data.frame(gene_id = validated_genes,
+                              gene_name = gene_names$gene_name[match(validated_genes, gene_names$gene_id)])
+andrysik_anno <- left_join(andrysik, gene_names, by = "gene_name")
+fisher_anno <- left_join(fisher_anno, gene_names, by = c("V1" = "gene_name"))
+```
+
+## 5FUr experiments
+
+### 5FUR
+```{r 5Fur Create plot data}
+### Create plot data for GGPLOT
+plot_data <- as.data.frame(cbind(rownames(res_ribo_5fur),res_ribo_5fur[,2],res_rna_5fur[,2]))
+colnames(plot_data) <- c("gene_id","ribo_lfc","rna_lfc")
+
+# Fix plot_data
+plot_data$ribo_lfc <- as.numeric(plot_data$ribo_lfc)
+plot_data$rna_lfc <- as.numeric(plot_data$rna_lfc)
+
+# Annotate genes
+plot_data$fisher <- ifelse(plot_data$gene_id %in% fisher_anno$gene_id,1,0)
+plot_data$andrysik <- ifelse(plot_data$gene_id %in% andrysik_anno$gene_id,2,0)
+plot_data$both <- as.factor(plot_data$fisher + plot_data$andrysik)
+plot_data$validated <- validated_genes$gene_name[match(plot_data$gene_id, validated_genes$gene_id)]
+plot_data$validated <- replace_na(plot_data$validated, "")
+```
+
+```{r 5fur plot}
+ggplot(data = plot_data, aes(x = rna_lfc, 
+                             y = ribo_lfc,
+                             color = both,
+                             label = gene_id)) +
+  geom_vline(colour = "gray", xintercept = 0) +
+  geom_hline(colour = "gray", yintercept = 0) +
+  geom_abline(colour = "gray", slope = 1, intercept = 0) +
+  geom_point(data = plot_data[plot_data$both == 0,],
+             size = 0.1, 
+             alpha = 0.1) +
+  geom_label_repel(data = plot_data,
+                  aes(label = validated),
+            box.padding = unit(0.3, "lines"),
+            label.size = NA,
+            label.padding = 0.1, direction = "both", 
+            nudge_x = -0.5, nudge_y = 0.5,
+            force = 15,
+            col = "black",
+            alpha = 0.8,
+            fontface = 2,
+            max.overlaps = 1000,
+            size = 4, show.legend = FALSE) +
+  geom_point(data = plot_data[plot_data$both %in% c(1,2,3),],
+             aes(x = rna_lfc, y = ribo_lfc), 
+             size = 3,
+             alpha = 0.8) +
+  scale_color_manual(values = cols,
+                    labels = c("None", "Fisher et al", 
+                               "Andrysik et al",
+                               "Both"),
+                    name = "Curated p53 target genes") +
+  guides(fill = guide_legend(override.aes = list(size = 8))) +
+  theme_classic() +
+  theme(text = element_text(size = 20)) +
+  labs(title = "Translational Efficiency",
+       subtitle = "5FUR EV vs 5FUR R213X",
+       x = "RNA-seq Log2 FC",
+       y= "Ribo-seq Log2 FC") +
+  lims(x = c(-5,5), y = c(-5,5))
+
+ggsave(device = "pdf",
+       filename = "5fur_fc_fc.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+### 5FUR EV
+```{r 5Fur Create plot data EV}
+### Create plot data for GGPLOT
+plot_data <- as.data.frame(cbind(rownames(res_ribo_5fur_ev),res_ribo_5fur_rx[,2],res_rna_5fur_ev[,2]))
+colnames(plot_data) <- c("gene_id","ribo_lfc","rna_lfc")
+
+# Fix plot_data
+plot_data$ribo_lfc <- as.numeric(plot_data$ribo_lfc)
+plot_data$rna_lfc <- as.numeric(plot_data$rna_lfc)
+
+# Annotate genes
+plot_data$fisher <- ifelse(plot_data$gene_id %in% fisher_anno$gene_id,1,0)
+plot_data$andrysik <- ifelse(plot_data$gene_id %in% andrysik_anno$gene_id,2,0)
+plot_data$both <- as.factor(plot_data$fisher + plot_data$andrysik)
+plot_data$validated <- validated_genes$gene_name[match(plot_data$gene_id, validated_genes$gene_id)]
+plot_data$validated <- replace_na(plot_data$validated, "")
+
+```
+
+```{r 5fur plot EV}
+fur_ev <- ggplot(data = plot_data, aes(x = rna_lfc, 
+                             y = ribo_lfc,
+                             color = both,
+                             label = gene_id)) +
+  geom_vline(colour = "gray", xintercept = 0) +
+  geom_hline(colour = "gray", yintercept = 0) +
+  geom_abline(colour = "gray", slope = 1, intercept = 0) +
+  geom_point(data = plot_data[plot_data$both == 0,],
+             size = 0.1, 
+             alpha = 0.1) +
+  geom_label_repel(data = plot_data,
+                  aes(label = validated),
+            box.padding = unit(0.3, "lines"),
+            label.size = NA,
+            label.padding = 0.1, direction = "both", 
+            nudge_x = -0.5, nudge_y = 0.5,
+            force = 15,
+            col = "black",
+            alpha = 0.8,
+            fontface = 2,
+            max.overlaps = 1000,
+            size = 4, show.legend = FALSE) +
+  geom_point(data = plot_data[plot_data$both %in% c(1,2,3),],
+             aes(x = rna_lfc, y = ribo_lfc), 
+             size = 3,
+             alpha = 0.8) +
+  scale_color_manual(values = cols,
+                    labels = c("None", "Fisher et al", 
+                               "Andrysik et al",
+                               "Both"),
+                    name = "Curated p53 target genes") +
+  guides(fill = guide_legend(override.aes = list(size = 8))) +
+  theme_classic() +
+  theme(text = element_text(size = 20)) +
+  labs(title = "Translational Efficiency",
+       subtitle = "Empty Vector 5FUR vs Untreated",
+       x = "RNA-seq Log2 FC",
+       y= "Ribo-seq Log2 FC") +
+  lims(x = c(-5,5), y = c(-5,5))
+
+ggsave(device = "pdf",
+       filename = "EV_5fur_fc_fc.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+### 5FUR R213X
+```{r 5Fur Create plot data R213X}
+### Create plot data for GGPLOT
+plot_data <- as.data.frame(cbind(rownames(res_ribo_5fur_rx),res_ribo_5fur_rx[,2],res_rna_5fur_rx[,2]))
+colnames(plot_data) <- c("gene_id","ribo_lfc","rna_lfc")
+
+# Fix plot_data
+plot_data$ribo_lfc <- as.numeric(plot_data$ribo_lfc)
+plot_data$rna_lfc <- as.numeric(plot_data$rna_lfc)
+
+# Annotate genes
+plot_data$fisher <- ifelse(plot_data$gene_id %in% fisher_anno$gene_id,1,0)
+plot_data$andrysik <- ifelse(plot_data$gene_id %in% andrysik_anno$gene_id,2,0)
+plot_data$both <- as.factor(plot_data$fisher + plot_data$andrysik)
+plot_data$validated <- validated_genes$gene_name[match(plot_data$gene_id, validated_genes$gene_id)]
+plot_data$validated <- replace_na(plot_data$validated, "")
+```
+
+```{r R213X plot 5fur}
+fur_rx <- ggplot(data = plot_data, aes(x = rna_lfc, 
+                             y = ribo_lfc,
+                             color = both,
+                             label = gene_id)) +
+  geom_vline(colour = "gray", xintercept = 0) +
+  geom_hline(colour = "gray", yintercept = 0) +
+  geom_abline(colour = "gray", slope = 1, intercept = 0) +
+  geom_point(data = plot_data[plot_data$both == 0,],
+             size = 0.1, 
+             alpha = 0.1) +
+  geom_label_repel(data = plot_data,
+                  aes(label = validated),
+            box.padding = unit(0.3, "lines"),
+            label.size = NA,
+            label.padding = 0.1, direction = "both", 
+            nudge_x = -0.5, nudge_y = 0.5,
+            force = 15,
+            col = "black",
+            alpha = 0.8,
+            fontface = 2,
+            max.overlaps = 1000,
+            size = 4, show.legend = FALSE) +
+  geom_point(data = plot_data[plot_data$both %in% c(1,2,3),],
+             aes(x = rna_lfc, y = ribo_lfc), 
+             size = 3,
+             alpha = 0.8) +
+  scale_color_manual(values = cols,
+                    labels = c("None", "Fisher et al", 
+                               "Andrysik et al",
+                               "Both"),
+                    name = "Curated p53 target genes") +
+  guides(fill = guide_legend(override.aes = list(size = 8))) +
+  theme_classic() +
+  theme(text = element_text(size = 20)) +
+  labs(title = "Translational Efficiency",
+       subtitle = "R213X 5FUR vs Untreated",
+       x = "RNA-seq Log2 FC",
+       y= "Ribo-seq Log2 FC") +
+  lims(x = c(-5,5), y = c(-5,5))
+
+ggsave(device = "pdf",
+       filename = "R213X_5fur_fc_fc.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+# G418 Experiments
+
+### G418
+```{r G418 Create plot data}
+### Create plot data for GGPLOT
+plot_data <- as.data.frame(cbind(rownames(res_ribo_g418),res_ribo_g418[,2],res_rna_g418[,2]))
+colnames(plot_data) <- c("gene_id","ribo_lfc","rna_lfc")
+
+# Fix plot_data
+plot_data$ribo_lfc <- as.numeric(plot_data$ribo_lfc)
+plot_data$rna_lfc <- as.numeric(plot_data$rna_lfc)
+
+# Annotate genes
+plot_data$fisher <- ifelse(plot_data$gene_id %in% fisher_anno$gene_id,1,0)
+plot_data$andrysik <- ifelse(plot_data$gene_id %in% andrysik_anno$gene_id,2,0)
+plot_data$both <- as.factor(plot_data$fisher + plot_data$andrysik)
+plot_data$validated <- validated_genes$gene_name[match(plot_data$gene_id, validated_genes$gene_id)]
+plot_data$validated <- replace_na(plot_data$validated, "")
+```
+
+```{r G418 plot}
+ggplot(data = plot_data, aes(x = rna_lfc, 
+                             y = ribo_lfc,
+                             color = both,
+                             label = gene_id)) +
+  geom_vline(colour = "gray", xintercept = 0) +
+  geom_hline(colour = "gray", yintercept = 0) +
+  geom_abline(colour = "gray", slope = 1, intercept = 0) +
+  geom_point(data = plot_data[plot_data$both == 0,],
+             size = 0.1, 
+             alpha = 0.1) +
+  geom_label_repel(data = plot_data,
+                  aes(label = validated),
+            box.padding = unit(0.3, "lines"),
+            label.size = NA,
+            label.padding = 0.1, direction = "both", 
+            nudge_x = -0.5, nudge_y = 0.5,
+            force = 15,
+            col = "black",
+            alpha = 0.8,
+            fontface = 2,
+            max.overlaps = 1000,
+            size = 4, show.legend = FALSE) +
+  geom_point(data = plot_data[plot_data$both %in% c(1,2,3),],
+             aes(x = rna_lfc, y = ribo_lfc), 
+             size = 3,
+             alpha = 0.8) +
+  scale_color_manual(values = cols,
+                    labels = c("None", "Fisher et al", 
+                               "Andrysik et al",
+                               "Both"),
+                    name = "Curated p53 target genes") +
+  guides(fill = guide_legend(override.aes = list(size = 8))) +
+  theme_classic() +
+  theme(text = element_text(size = 20)) +
+  labs(title = "Translational Efficiency",
+       subtitle = "G418 EV vs G418 R213X",
+       x = "RNA-seq Log2 FC",
+       y= "Ribo-seq Log2 FC") +
+  lims(x = c(-5,5), y = c(-5,5))
+
+ggsave(device = "pdf",
+       filename = "g418_fc_fc.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+  
+```
+
+### g418 EV
+
+```{r G418 Create plot data EV}
+### Create plot data for GGPLOT
+plot_data <- as.data.frame(cbind(rownames(res_ribo_g418_ev),res_ribo_g418_ev[,2],res_rna_g418_ev[,2]))
+colnames(plot_data) <- c("gene_id","ribo_lfc","rna_lfc")
+
+# Fix plot_data
+plot_data$ribo_lfc <- as.numeric(plot_data$ribo_lfc)
+plot_data$rna_lfc <- as.numeric(plot_data$rna_lfc)
+
+# Annotate genes
+plot_data$fisher <- ifelse(plot_data$gene_id %in% fisher_anno$gene_id,1,0)
+plot_data$andrysik <- ifelse(plot_data$gene_id %in% andrysik_anno$gene_id,2,0)
+plot_data$both <- as.factor(plot_data$fisher + plot_data$andrysik)
+plot_data$validated <- validated_genes$gene_name[match(plot_data$gene_id, validated_genes$gene_id)]
+plot_data$validated <- replace_na(plot_data$validated, "")
+```
+
+```{r G418 plot EV}
+g418_ev <- ggplot(data = plot_data, aes(x = rna_lfc, 
+                             y = ribo_lfc,
+                             color = both,
+                             label = gene_id)) +
+  geom_vline(colour = "gray", xintercept = 0) +
+  geom_hline(colour = "gray", yintercept = 0) +
+  geom_abline(colour = "gray", slope = 1, intercept = 0) +
+  geom_point(data = plot_data[plot_data$both == 0,],
+             size = 0.1, 
+             alpha = 0.1) +
+  geom_label_repel(data = plot_data,
+                  aes(label = validated),
+            box.padding = unit(0.3, "lines"),
+            label.size = NA,
+            label.padding = 0.1, direction = "both", 
+            nudge_x = -0.5, nudge_y = 0.5,
+            force = 0.1,
+            col = "black",
+            alpha = 0.8,
+            fontface = 2,
+            max.overlaps = 15000,
+            size = 4, show.legend = FALSE) +
+  geom_point(data = plot_data[plot_data$both %in% c(1,2,3),],
+             aes(x = rna_lfc, y = ribo_lfc), 
+             size = 3,
+             alpha = 0.8) +
+  scale_color_manual(values = cols,
+                    labels = c("None", "Fisher et al", 
+                               "Andrysik et al",
+                               "Both"),
+                    name = "Curated p53 target genes") +
+  guides(fill = guide_legend(override.aes = list(size = 8))) +
+  theme_classic() +
+  theme(text = element_text(size = 20)) +
+  labs(title = "Translational Efficiency",
+       subtitle = "Empty Vector G418 vs Untreated",
+       x = "RNA-seq Log2 FC",
+       y= "Ribo-seq Log2 FC") +
+  lims(x = c(-5,5), y = c(-5,5))
+
+ggsave(device = "pdf",
+       filename = "EV_g418_fc_fc.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+  
+```
+
+### g418 R213X
+
+```{r G418 Create plot data R213X}
+### Create plot data for GGPLOT
+plot_data <- as.data.frame(cbind(rownames(res_ribo_g418_rx),res_ribo_g418_rx[,2],res_rna_g418_rx[,2]))
+colnames(plot_data) <- c("gene_id","ribo_lfc","rna_lfc")
+
+# Fix plot_data
+plot_data$ribo_lfc <- as.numeric(plot_data$ribo_lfc)
+plot_data$rna_lfc <- as.numeric(plot_data$rna_lfc)
+
+# Annotate genes
+plot_data$fisher <- ifelse(plot_data$gene_id %in% fisher_anno$gene_id,1,0)
+plot_data$andrysik <- ifelse(plot_data$gene_id %in% andrysik_anno$gene_id,2,0)
+plot_data$both <- as.factor(plot_data$fisher + plot_data$andrysik)
+plot_data$validated <- validated_genes$gene_name[match(plot_data$gene_id, validated_genes$gene_id)]
+plot_data$validated <- replace_na(plot_data$validated, "")
+```
+
+```{r G418 plot R213X}
+g418_rx <- ggplot(data = plot_data, aes(x = rna_lfc, 
+                             y = ribo_lfc,
+                             color = both,
+                             label = gene_id)) +
+  geom_vline(colour = "gray", xintercept = 0) +
+  geom_hline(colour = "gray", yintercept = 0) +
+  geom_abline(colour = "gray", slope = 1, intercept = 0) +
+  geom_point(data = plot_data[plot_data$both == 0,],
+             size = 0.1, 
+             alpha = 0.1) +
+  geom_label_repel(data = plot_data,
+                  aes(label = validated),
+            box.padding = unit(0.3, "lines"),
+            label.size = NA,
+            label.padding = 0.1, direction = "both", 
+            nudge_x = -0.5, nudge_y = 0.5,
+            force = 15,
+            col = "black",
+            alpha = 0.8,
+            fontface = 2,
+            max.overlaps = 1000,
+            size = 4, show.legend = FALSE) +
+  geom_point(data = plot_data[plot_data$both %in% c(1,2,3),],
+             aes(x = rna_lfc, y = ribo_lfc), 
+             size = 3,
+             alpha = 0.8) +
+  scale_color_manual(values = cols,
+                    labels = c("None", "Fisher et al", 
+                               "Andrysik et al",
+                               "Both"),
+                    name = "Curated p53 target genes") +
+  guides(fill = guide_legend(override.aes = list(size = 8))) +
+  theme_classic() +
+  theme(text = element_text(size = 20)) +
+  labs(title = "Translational Efficiency",
+       subtitle = "R213X G418 vs Untreated",
+       x = "RNA-seq Log2 FC",
+       y= "Ribo-seq Log2 FC") +
+  lims(x = c(-5,5), y = c(-5,5))
+
+ggsave(device = "pdf",
+       filename = "R213X_g418_fc_fc.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+  
+```
+
+```{r plot all}
+ggarrange(fur_ev, fur_rx, g418_ev,g418_rx,
+          ncol = 2, nrow = 2,
+          common.legend = T)
+
+ggsave(device = "pdf",
+       filename = "all_fc_fc.pdf",
+       width = 24,
+       height = 16,
+       path = save_dir)
+```

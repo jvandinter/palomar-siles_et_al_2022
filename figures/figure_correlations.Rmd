@@ -1,0 +1,314 @@
+---
+title: "Stockholm Correlation Plots"
+author: "Jip van Dinter"
+date: "11/2/2021"
+output: html_document
+---
+
+# Correlation
+
+Create correlation plots for quality control. This requires count matrices as input.
+
+## Establish global variables
+
+```{r global variables}
+data_dir <- folder_with_counts
+save_dir <- save_dir
+color_scheme <- c("#8F8F93","#FF8800","#43C1F0")
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(DESeq2)
+library(tidyverse)
+library(tximport)
+library(rtracklayer)
+library(ggrepel)
+library(ComplexHeatmap)
+library(magick)
+library(RColorBrewer)
+library(viridis)
+library(GGally)
+library(ggsci)
+library(circlize)
+library(ggrepel)
+```
+
+```{r Load metadata}
+# Load metadata
+sample_info <- read.table(file = paste0(data_dir,"/metadata.txt"),
+                          header = T,
+                          sep = "\t")
+
+# Create correct levelled factors again 
+sample_info <- data.frame("Sample ID" = sample_info$Sample.ID,
+                          SeqType = factor(c(rep("RIBO",24),rep("RNA",24)),
+                                           levels = c("RNA","RIBO")),
+                          Condition = factor(c(rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4),
+                                               rep("Untreated",4),rep("G418",4),rep("5FUR",4)), 
+                                             levels = c("Untreated","G418","5FUR")),
+                          Batch = factor(c(rep("Empty vector",12),rep("R213X",12),
+                                           rep("Empty vector",12),rep("R213X",12)),
+                                         levels = c("Empty vector","R213X")))
+sample_info$group <- factor(paste(sample_info$Batch,sample_info$Condition, sep = "_"), 
+                            levels = c("Empty vector_Untreated","Empty vector_G418",
+                                       "Empty vector_5FUR","R213X_Untreated",
+                                       "R213X_G418","R213X_5FUR"))
+```
+
+## Load the count data
+
+```{r RIBO data load}
+ribo_count_data <- list.files(path = data_dir,
+                              pattern = "FeatureCounts_RIBO.txt",
+                              recursive = T)
+ribo_count_df <- read.table(file = paste(data_dir,ribo_count_data,sep = "/"),
+                                   header = T)
+colnames(ribo_count_df) <- sample_info[which(sample_info$SeqType == "RIBO"),]$Sample.ID
+ribo_count_cluster <- ribo_count_df[,c(9:12,21:24,17:20,5:8,1:4,13:16)]
+```
+
+```{r RNA data load}
+rna_count_data <- list.files(path = data_dir,
+                              pattern = "FeatureCounts_RNA.txt",
+                              recursive = T)
+rna_count_df <- read.table(file = paste(data_dir,rna_count_data,sep = "/"),
+                                   header = T)
+colnames(rna_count_df) <- sample_info[which(sample_info$SeqType == "RIBO"),]$Sample.ID
+rna_count_cluster <- rna_count_df[,c(9:12,21:24,17:20,5:8,1:4,13:16)]
+```
+
+```{r RNA RIBO data load}
+rna_ribo_count_data <- list.files(path = data_dir,
+                              pattern = "FeatureCounts_RNA_RIBO.txt",
+                              recursive = T)
+rna_ribo_count_df <- read.table(file = paste(data_dir,rna_ribo_count_data,sep = "/"),
+                                   header = T)
+colnames(rna_ribo_count_df) <- sample_info[which(sample_info$SeqType == "RIBO"),]$Sample.ID
+rna_ribo_count_cluster <- rna_ribo_count_df[,c(9:12,21:24,17:20,5:8,1:4,13:16)]
+```
+
+## Create specific ordering sample_info for clustering
+
+```{r RIBO metadata}
+sample_info_cluster <- data.frame("Sample ID" = c(colnames(ribo_count_cluster),colnames(rna_count_cluster)),
+                          SeqType = factor(c(rep("RIBO",24),rep("RNA",24)),
+                                           levels = c("RNA","RIBO")),
+                          Condition = factor(c(rep("5FUR",8),
+                                               rep("G418",8),
+                                               rep("Untreated",8)),
+                                             levels = c("Untreated","G418","5FUR")),
+                          Batch = factor(c(rep("Empty vector",4),rep("R213X",8),
+                                           rep("Empty vector",8),rep("R213X",4)),
+                                         levels = c("Empty vector","R213X")))
+sample_info_cluster$group <- factor(paste(sample_info_cluster$Batch,sample_info_cluster$Condition, sep = "_"), 
+                            levels = c("Empty vector_Untreated","Empty vector_G418",
+                                       "Empty vector_5FUR","R213X_Untreated",
+                                       "R213X_G418","R213X_5FUR"))
+```
+
+# RIBO-seq
+
+## Create DDS object and plot global correlations
+
+```{r RIBO DDS object}
+dds_ribo <- DESeqDataSetFromMatrix(countData = ribo_count_cluster,
+                              colData = sample_info_cluster[which(sample_info$SeqType == "RIBO"),],
+                              design = ~ group)
+vsd_ribo <- vst(dds_ribo, blind = F)
+```
+
+```{r RIBO pearson correlation matrix}
+# Create distance matrix
+sampleDists <- cor(assay(vsd_ribo), method = "pearson")
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd_ribo$Condition, vsd_ribo$Batch, sep="-")
+colnames(sampleDistMatrix) <- paste(vsd_ribo$Condition, vsd_ribo$Batch, sep="-")
+## Keep same ordering as RNA data:
+#sampleDistMatrix <- sampleDistMatrix[,c()]
+# Make annotation data.frame
+df <- as.data.frame(colData(dds_ribo)[,c("Condition","Batch")])
+rownames(df) <- colnames(dds_ribo)
+colnames(df) <- c("Treatment","Vector")
+df$Treatment <- factor(df$Treatment, levels = c("Untreated","G418","5FUR"))
+df$Vector <- factor(df$Vector, levels = c("Empty vector","R213X"))
+c("#E6550DFF","#31A354FF","#3182BDFF")
+# Set annotation colors
+anno_cols <- list(Treatment = setNames(rev(color_scheme),
+                                       unique(df$Treatment)),
+                  Vector = setNames(c("#008B8B","#EE3349"),
+                                    unique(df$Vector)))
+# Make heatmap annotations
+ha_col <- HeatmapAnnotation(df = df, 
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+ha_row <- HeatmapAnnotation(df = df, 
+                        which = "row", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+my_col <- colorRampPalette(brewer.pal(n = 9, name = "Reds"))(100)
+breaks <- seq(0.5, 1, length.out = 100)
+
+# Copy this outside Rmd document in R script in same R session
+#TODO: fix to make it work in RMD
+pdf(paste0(save_dir,"/pearson_cor_RIBO.pdf"),
+    width = 8,
+    height = 8)
+
+ht <- Heatmap(sampleDistMatrix,
+              top_annotation = ha_col,
+              left_annotation = ha_row, 
+              cluster_rows = F, 
+              cluster_columns = F,
+              show_row_names = F,
+              show_column_names = F,
+              show_row_dend = F,
+              show_column_dend = F,
+              column_gap = unit(1, "mm"),
+              row_gap = unit(1, "mm"),
+              col = colorRamp2(breaks, my_col),
+              heatmap_legend_param = list(legend_direction = "horizontal", 
+                                          title_position = "topcenter", 
+                                          legend_width = unit(10, "line"),
+                                          title = "Pearson correlation"),
+              column_title = "RIBO-seq Sample Distance Matrix", 
+              column_title_gp = gpar(fontsize = 12, fontface = "bold"))
+
+draw(ht, heatmap_legend_side = "bottom", annotation_legend_side = "right", legend_grouping = "original")
+
+dev.off()
+```
+
+# RNA-RIBO
+
+```{r RNA-RIBO DDS generation}
+dds_rna_ribo <- DESeqDataSetFromMatrix(countData = rna_ribo_count_cluster,
+                              colData = sample_info_cluster[which(sample_info_cluster$SeqType == "RNA"),],
+                              design = ~ group)
+vsd_rna_ribo <- vst(dds_rna_ribo, blind=F)
+```
+
+```{r RNA-RIBO pearson square cor matrix}
+# Create distance matrix
+sampleDists <- cor(assay(vsd_rna_ribo), method = "pearson")
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd_rna_ribo$Condition, vsd_rna_ribo$Batch, sep="-")
+colnames(sampleDistMatrix) <- paste(vsd_rna_ribo$Condition, vsd_rna_ribo$Batch, sep="-")
+## Keep same ordering as RNA data:
+#sampleDistMatrix <- sampleDistMatrix[,c()]
+# Make annotation data.frame
+df <- as.data.frame(colData(dds_rna_ribo)[,c("Condition","Batch")])
+rownames(df) <- colnames(dds_rna_ribo)
+colnames(df) <- c("Treatment","Vector")
+df$Treatment <- factor(df$Treatment, levels = c("Untreated","G418","5FUR"))
+df$Vector <- factor(df$Vector, levels = c("Empty vector","R213X"))
+c("#E6550DFF","#31A354FF","#3182BDFF")
+# Set annotation colors
+anno_cols <- list(Treatment = setNames(rev(color_scheme),
+                                       unique(df$Treatment)),
+                  Vector = setNames(c("#008B8B","#EE3349"),
+                                    unique(df$Vector)))
+# Make heatmap annotations
+ha_col <- HeatmapAnnotation(df = df, 
+                        which = "column", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+ha_row <- HeatmapAnnotation(df = df, 
+                        which = "row", 
+                        col = anno_cols,
+                        show_annotation_name = F, 
+                        simple_anno_size = unit(0.3, "cm"))
+
+# Copy this outside Rmd document in R script in same R session
+#TODO: fix to make it work in RMD
+pdf(paste0(save_dir,"/pearson_cor_RNA_as_Ribo.pdf"),
+    width = 8,
+    height = 8)
+
+ht <- Heatmap(sampleDistMatrix,
+              top_annotation = ha_col,
+              left_annotation = ha_row, 
+              cluster_rows = F, 
+              cluster_columns = F,
+              show_row_names = F,
+              show_column_names = F,
+              show_row_dend = F,
+              show_column_dend = F,
+              column_gap = unit(1, "mm"),
+              row_gap = unit(1, "mm"),
+              col = colorRamp2(breaks, my_col),
+              heatmap_legend_param = list(legend_direction = "horizontal", 
+                                          title_position = "topcenter", 
+                                          legend_width = unit(10, "line"),
+                                          title = "Distance between samples"),
+              column_title = "RNA-RIBO Sample Distance Matrix", 
+              column_title_gp = gpar(fontsize = 12, fontface = "bold"))
+
+draw(ht, heatmap_legend_side = "bottom", annotation_legend_side = "right", legend_grouping = "original")
+
+dev.off()
+```
+
+```{r RIBO read lengths periodicity}
+# The periodicity numbers are the percentages output by RiboseQC. See the riboseqc output HTML for details. The percentage is from table 4.2.2 (frame_preference)
+
+periodicity_df <- data.frame(sample_id = sample_info$Sample.ID[1:24],
+                      periodicity = c(80.04,75.07,77.80,77.57,
+                                      78.08,74.66,78.08,78.58,
+                                      70.88,72.32,74.54,74.35,
+                                      80.02,80.68,75.53,77.54,
+                                      82.04,75.96,79.51,83.22,
+                                      69.93,66.45,68.38,75.05),
+                      vector = sample_info$Batch[1:24])
+periodicity_df$treatment <- factor(ifelse(grepl("G418",periodicity_df$sample_id),
+                                                 "G418",
+                                                 ifelse(grepl("5FUR",periodicity_df$sample_id),
+                                                       "FUr",
+                                                       "NT")),
+                                          levels = c("NT","FUr","G418"))
+
+split_by_treatment <- split(periodicity_df, periodicity_df$treatment)
+
+periodicity_plot_df <- bind_rows(lapply(split_by_treatment, function(x) {
+  print(paste("Parsing", unique(x$treatment), sep = " "))
+  df <- data.frame(sample_id = x$sample_id,
+                   treatment = x$treatment,
+                   vector = x$vector,
+                   periodicity = x$periodicity,
+                   mean = mean(x$periodicity),
+                   sd = sd(x$periodicity),
+                   se = sd(x$periodicity)/sqrt(4))
+    return(df)
+}))
+
+periodicity_plot_df <- data.frame(sample_id = periodicity_df$sample_id,
+                                  samples = "samples",
+                   periodicity = periodicity_df$periodicity,
+                   mean = mean(periodicity_df$periodicity),
+                   sd = sd(periodicity_df$periodicity),
+                   se = sd(periodicity_df$periodicity)/sqrt(4))
+
+ggplot(data = periodicity_plot_df, aes(x = samples, y = periodicity)) +
+  geom_errorbar(aes(ymax = mean + 2 * se, ymin = mean - 2 * se),
+                position = "dodge", width = 0.1, col = "black") +
+  geom_boxplot() +
+  xlab("") +
+  ggbeeswarm::geom_beeswarm() +
+  scale_y_continuous(limits = c(0,100)) +
+  theme_bw() +
+  theme(text = element_text(size = 20), panel.grid = element_blank())
+
+ggsave(device = "pdf",
+       filename = "stockholm_periodicity.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+```

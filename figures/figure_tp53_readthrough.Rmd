@@ -1,0 +1,428 @@
+---
+title: "TP53 CDS plot"
+author: "Jip van Dinter"
+date: "12/2/2021"
+output: html_document
+---
+
+This script requires the bed files that are output from riboseqc. Please make sure these files are in the data_dir.
+
+```{r}
+data_dir <- folder with coverage tracks from RiboseQC
+save_dir <- save dir
+color_scheme <- c("#8F8F93","#43C1F0","#FF8800")
+```
+
+```{r libraries}
+library(ggplot2)
+library(rtracklayer)
+library(scales)
+```
+
+## Load the data
+
+The position DF is used to connect CDS positions to coverage in the later script chunks.
+
+```{r Position DF}
+single_nt_tp53_gr <- Granges(read.table(paste(data_dir,"tp53_single_nt_windows.txt", sep = "/"), 
+                                        header = T, sep = "\t"))
+rel_pos_df <- read.table(paste(data_dir,"tp53_cds_position.txt", sep = "/"), 
+                         header = T, sep = "\t")
+
+```
+
+Load in the Read Coverage data from RiboseQC, only using - strand as TP53 is located on the - strand.
+
+```{r RiboseQC Unique reads}
+ribo_cov_dfs_uniq <- list()
+ribo_cov_list <- list.files(path = data_dir, pattern = "*coverage_uniq_minus*",recursive = T) 
+
+for (i in seq_along(ribo_cov_list)) {
+
+  sample_file = ribo_cov_list[i]
+  sample_id = sub(".*H1299-","",sample_file)
+  sample_id = sub("_coverage.*","",sample_id)
+  print(paste("Parsing", sample_id, sep = " "))
+  f = import.bed(paste(data_dir,sample_file, sep = "/"))
+  strand(f) <- "-"
+  colnames(mcols(f)) <- "coverage"
+  
+  # Calculate P site coverage over TP53 CDS region
+  exact_hits <- findOverlaps(query = single_nt_tp53_gr, subject = f, type = "equal")
+      
+  query_exact_hits <- single_nt_tp53_gr[queryHits(exact_hits)]
+  subject_exact_hits <- f[subjectHits(exact_hits)]
+  ribo_cov_df <- as.data.frame(subject_exact_hits)
+  
+  # Annotate DF with sample data
+  ribo_cov_df$sample_id <- rep(sample_id,nrow(ribo_cov_df))
+  ribo_cov_df$rel_pos <- rel_pos_df[which(rel_pos_df$pos %in% ribo_cov_df$start),]$rel_pos
+  ribo_cov_df$vector <- ifelse(grepl("EV", ribo_cov_df$sample_id),"EV","R213X")
+  ribo_cov_df$treatment <- ifelse(grepl("G418", ribo_cov_df$sample_id),"G418",
+                        ifelse(grepl("5FUR",ribo_cov_df$sample_id),"5FUR","NT"))
+  ribo_cov_df$treatment <- factor(ribo_cov_df$treatment, levels = c("NT","5FUR","G418"))
+  ribo_cov_dfs_uniq[[sample_id]] <- ribo_cov_df
+}
+
+ribo_cov_df_uniq <- do.call("rbind",ribo_cov_dfs_uniq)
+ribo_cov_df_uniq$coverage <- as.numeric(ribo_cov_df_uniq$coverage)
+```
+
+Create DF for coverage difference between Untreated and Treated samples
+
+```{r Remove background reads}
+ribo_cov_delta_dfs <- list()
+ribo_cov_delta_list <- list.files(path = data_dir, pattern = "*coverage_uniq_minus*",recursive = T) 
+
+for (i in seq_along(ribo_cov_delta_list)) {
+
+  sample_file = ribo_cov_delta_list[i]
+  sample_id = sub(".*H1299-","",sample_file)
+  sample_id = sub("_coverage.*","",sample_id)
+  print(paste("Parsing", sample_id, sep = " "))
+  f = import.bed(paste(data_dir,sample_file, sep = "/"))
+  strand(f) <- "-"
+  colnames(mcols(f)) <- "coverage"
+  
+  # Calculate P site coverage over TP53 CDS region
+  exact_hits <- findOverlaps(query = single_nt_tp53_gr, subject = f, type = "equal")
+      
+  query_exact_hits <- single_nt_tp53_gr[queryHits(exact_hits)]
+  subject_exact_hits <- f[subjectHits(exact_hits)]
+  ribo_cov_delta_df <- as.data.frame(subject_exact_hits)
+  
+  # Annotate DF with sample data
+  ribo_cov_delta_df$sample_id <- rep(sample_id,nrow(ribo_cov_delta_df))
+  ribo_cov_delta_df$rel_pos <- rel_pos_df[which(rel_pos_df$pos %in% ribo_cov_delta_df$start),]$rel_pos
+  
+  df <- left_join(rel_pos_df, ribo_cov_delta_df[,c("rel_pos","coverage")])
+  df[is.na(df)] <- 0
+  colnames(df) <- c("pos","rel_pos",sample_id)
+  ribo_cov_delta_dfs[[sample_id]] <- df[,sample_id]
+}
+
+ribo_cov_delta_df <- as.data.frame(do.call("cbind",ribo_cov_delta_dfs))
+ribo_cov_delta_df <- bind_rows(lapply(ribo_cov_delta_df,as.numeric))
+ribo_cov_ev <- ribo_cov_delta_df[,1:12]
+ribo_cov_r213x <- ribo_cov_delta_df[,13:24]
+
+# Calculate sums for delta 
+ev_nt <- rowSums(ribo_cov_ev[1:4])
+ev_g418 <- rowSums(ribo_cov_ev[5:8])
+ev_5fur <- rowSums(ribo_cov_ev[9:12])
+r213x_nt <- rowSums(ribo_cov_r213x[1:4])
+r213x_g418 <- rowSums(ribo_cov_r213x[5:8])
+r213x_5fur <- rowSums(ribo_cov_r213x[9:12])
+
+# Collect in one table
+plot_delta <- data.frame(rel_pos = rel_pos_df$rel_pos,
+                         "EV_5FUR" = ev_5fur - ev_nt,
+                         "EV_G418" = ev_g418 - ev_nt,
+                         "R213X_5FUR" = r213x_5fur - r213x_nt,
+                         "R213X_G418" = r213x_g418 - r213x_nt) %>%
+  pivot_longer(!rel_pos, names_to = "group_id", values_to = "coverage")
+
+plot_delta$vector <- ifelse(grepl("EV", plot_delta$group_id),"EV","R213X")
+plot_delta$treatment <- ifelse(grepl("G418", plot_delta$group_id),"G418","5FUR")
+plot_delta$treatment <- factor(plot_delta$treatment, levels = c("NT","5FUR","G418"))
+```
+
+Explanation of chosen numbers:
+
+### CDS
+1:636
+### R213X codon
+637
+638
+639
+### CDS
+length(640:nrow(rel_pos))
+
+Coverage data for ratios
+```{r RiboseQC ratio}
+ribo_ratio_dfs <- list()
+ribo_ratio_list <- list.files(path = data_dir, pattern = ".*R213X.*coverage_uniq_minus.bedgraph", recursive = T) 
+
+for (i in seq_along(ribo_ratio_list)) {
+
+  sample_file = ribo_ratio_list[i]
+  sample_id = sub(".*H1299-","",sample_file)
+  sample_id = sub("_coverage.*","",sample_id)
+  print(paste("Parsing", sample_id, sep = " "))
+  f = import.bed(paste(data_dir,sample_file, sep = "/"))
+  strand(f) <- "-"
+  colnames(mcols(f)) <- "coverage"
+  
+  # Calculate P site coverage over TP53 CDS region
+  exact_hits <- findOverlaps(query = single_nt_tp53_gr, subject = f, type = "equal")
+      
+  query_exact_hits <- single_nt_tp53_gr[queryHits(exact_hits)]
+  subject_exact_hits <- f[subjectHits(exact_hits)]
+  ribo_ratio_df <- as.data.frame(subject_exact_hits)
+  ribo_ratio_df$coverage <- as.numeric(ribo_ratio_df$coverage)
+  ribo_ratio_df$rel_pos <- rel_pos_df[which(rel_pos_df$pos %in% ribo_ratio_df$start),]$rel_pos
+  ribo_ratio_df$frame <- as.character(ribo_ratio_df$rel_pos %% 3)
+  
+  ribo_ratio_df_low <- ribo_ratio_df[which(ribo_ratio_df$rel_pos %in% 1:636),]
+  ribo_ratio_df_high <- ribo_ratio_df[which(ribo_ratio_df$rel_pos %in% 640:nrow(rel_pos_df)),]
+  ribo_ratio_sum_low <- sum(ribo_ratio_df_low$coverage)
+  ribo_ratio_sum_high <- sum(ribo_ratio_df_high$coverage)
+  treatment <- ifelse(grepl("G418", sample_id),"G418",
+                        ifelse(grepl("5FUR",sample_id),"5FUR","NT"))
+  treatment <- factor(treatment, levels = c("NT","5FUR","G418"))
+  # Annotate DF with sample data
+  ribo_ratio_df_new <- data.frame(sample_id = sample_id,
+                             pre_stop_sum = ribo_ratio_sum_low,
+                             post_stop_sum = ribo_ratio_sum_high,
+                             pre_stop_sum_norm = ribo_ratio_sum_low / (636 / 3),
+                             post_stop_sum_norm = ribo_ratio_sum_high / (length(640:nrow(rel_pos_df)) / 3),
+                             ribo_ratio = (ribo_ratio_sum_high / (length(640:nrow(rel_pos_df)) / 3)) / (ribo_ratio_sum_low / (636 / 3)),
+                             treatment = treatment
+                             )
+  ribo_ratio_dfs[[sample_id]] <- ribo_ratio_df_new
+}
+
+ribo_ratio_df <- do.call("rbind",ribo_ratio_dfs)
+split_by_treatment <- split(ribo_ratio_df, ribo_ratio_df$treatment)
+
+write.table(ribo_ratio_df, file = paste(save_dir,"ribo_tp53_ratio.txt",sep = "/"),
+            quote = F, sep = ";", row.names = F, dec = ",")
+
+```
+
+Plot all the data:
+```{r RiboseQC cov plot}
+ggplot(data = ribo_cov_df_uniq, aes(x = rel_pos, xend = rel_pos, y = 0, yend = coverage)) +
+  geom_segment(aes(col = treatment)) +
+  xlab("Relative CDS Position") +
+  ylab("Normalised Read Coverage") +
+  scale_color_manual(values = color_scheme) +
+  scale_x_continuous(breaks = c(0,637,1179),
+                     labels = c("start","R213X","stop")) +
+  theme_bw() +
+  facet_grid(vector ~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC R213X cov plot}
+ggplot(data = ribo_cov_df_uniq[which(ribo_cov_df_uniq$vector == "R213X"),], aes(x = rel_pos, xend = rel_pos, y = 0, yend = coverage)) +
+  geom_segment(aes(col = treatment)) +
+  xlab("Relative CDS Position") +
+  ylab("Normalised Read Coverage") +
+  scale_color_manual(values = color_scheme) +
+  scale_x_continuous(breaks = c(0,637,1179),
+                     labels = c("start","R213X","stop")) +
+  theme_bw() +
+  facet_grid(~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC cov r213x zoom}
+# Around R213X
+ggplot(data = ribo_cov_df_uniq[which(ribo_cov_df_uniq$vector == "R213X"),], aes(x = rel_pos, xend = rel_pos, y = 0, yend = coverage)) +
+  geom_segment(aes(col = treatment, group = sample_id)) +
+  xlab("Relative CDS Position") +
+  ylab("Normalised in-frame Read Coverage") +
+  scale_color_manual(values = color_scheme) +
+  scale_x_continuous(breaks = c(637-100,637,637+150),
+                     labels = c("","R213X",""),
+                     limits = c(637-100,637+150)) +
+  theme_bw() +
+  facet_grid(~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x_zoom.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC delta cov r213x plot}
+ggplot(data = plot_delta[which(plot_delta$vector == "R213X"),], aes(x = rel_pos, 
+                              xend = rel_pos,
+                              y = 0, yend = coverage,
+                              col = treatment)) +
+  geom_segment() +
+  xlab("Relative CDS Position") +
+  ylab("Normalised Read Coverage") +
+  scale_color_manual(values = color_scheme[2:3]) +
+  scale_x_continuous(breaks = c(0,637,1179),
+                     labels = c("start","R213X","stop")) +
+  theme_bw() +
+  facet_grid(vector ~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x_delta.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC delta cov r213x zoom}
+ggplot(data = plot_delta[which(plot_delta$vector == "R213X"),], 
+       aes(x = rel_pos, xend = rel_pos,
+           y = 0, yend = coverage,
+           col = treatment)) +
+  geom_segment() +
+  xlab("Relative CDS Position") +
+  ylab("Normalised Read Coverage") +
+  scale_color_manual(values = color_scheme[2:3]) +
+  scale_x_continuous(limits = c(637,1179),
+                     breaks = c(637,1179),
+                     labels = c("R213X","stop")) +
+  scale_y_continuous(limits = c(-2,5)) +
+  theme_bw() +
+  facet_grid(vector ~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x_delta_zoom.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r Plot ratio}
+# Errorbars with SE
+ggplot(data = ribo_ratio_plotdata,aes(x = treatment, y = ratio)) +
+  geom_boxplot(aes(fill = treatment)) +
+  ggbeeswarm::geom_beeswarm() +
+  scale_fill_manual(values = color_scheme) +
+  xlab("Treatment Condition") +
+  ylab("RPF Readthrough Ratio") +
+  scale_y_continuous(labels = percent) +
+  theme_classic()
+
+ggsave(device = "pdf",
+       filename = "readthrough_ratio_p53.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+```
+
+Same plots, but with geom_line instead of geom_segment
+```{r RiboseQC cov plot}
+ggplot(data = ribo_cov_df_uniq, aes(x = rel_pos, y = coverage)) +
+  geom_line(aes(col = treatment)) +
+  xlab("Relative CDS Position") +
+  ylab("Normalised Read Coverage") +
+  scale_color_manual(values = color_scheme) +
+  scale_x_continuous(breaks = c(0,637,1179),
+                     labels = c("start","R213X","stop")) +
+  theme_bw() +
+  facet_grid(vector ~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_line.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC R213X cov plot}
+ggplot(data = ribo_cov_df_uniq[which(ribo_cov_df_uniq$vector == "R213X"),], aes(x = rel_pos, y = coverage)) +
+  geom_line(aes(col = treatment)) +
+  xlab("Relative CDS Position") +
+  ylab("Normalised Read Coverage") +
+  scale_color_manual(values = color_scheme) +
+  scale_x_continuous(breaks = c(0,637,1179),
+                     labels = c("start","R213X","stop")) +
+  theme_bw() +
+  facet_grid(~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x_line.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC cov r213x zoom}
+# Around R213X
+ggplot(data = ribo_cov_df_uniq[which(ribo_cov_df_uniq$vector == "R213X"),], aes(x = rel_pos, xend = rel_pos, y = 0, yend = coverage)) +
+  geom_segment(aes(col = treatment, group = sample_id)) +
+  xlab("Relative CDS Position") +
+  ylab("Normalised in-frame Read Coverage") +
+  scale_color_manual(values = color_scheme) +
+  scale_x_continuous(breaks = c(637-100,637,637+150),
+                     labels = c("","R213X",""),
+                     limits = c(637-100,637+150)) +
+  theme_bw() +
+  facet_grid(~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x_zoom_line.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC delta cov plot}
+ggplot(data = plot_delta, aes(x = rel_pos, 
+                              y =  coverage,
+                              col = treatment)) +
+  geom_line() +
+  xlab("Relative CDS Position") +
+  ylab("Difference in Norm. Coverage") +
+  scale_color_manual(values = color_scheme[2:3]) +
+  scale_x_continuous(breaks = c(0,637,1179),
+                     labels = c("start","R213X","stop")) +
+  theme_bw() +
+  facet_grid(vector ~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x_delta_line.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```
+
+```{r RiboseQC delta cov r213x zoom}
+plot_delta_line <- plot_delta
+plot_delta_line[plot_delta_line == 0] <- NA
+  
+ggplot(data = plot_delta_line[which(plot_delta_line$vector == "R213X" & complete.cases(plot_delta_line)),], 
+              aes(x = rel_pos,
+                  y = coverage,
+                  col = treatment)) +
+  geom_line() +
+  xlab("Relative CDS Position") +
+  ylab("Difference in Norm. Coverage") +
+  scale_color_manual(values = color_scheme[2:3]) +
+  scale_x_continuous(limits = c(637,1179),
+                     breaks = c(637,1179),
+                     labels = c("R213X","stop")) +
+  scale_y_continuous(limits = c(-2,5)) +
+  theme_bw() +
+  facet_grid(vector ~ treatment)
+
+ggplot(data = plot_delta[which(plot_delta$vector == "R213X"),], 
+              aes(x = rel_pos,
+                  y = coverage,
+                  col = treatment)) +
+  geom_line() +
+  xlab("Relative CDS Position") +
+  ylab("Difference in Norm. Coverage") +
+  scale_color_manual(values = color_scheme[2:3]) +
+  scale_x_continuous(limits = c(637,1179),
+                     breaks = c(637,1179),
+                     labels = c("R213X","stop")) +
+  scale_y_continuous(limits = c(-2,5)) +
+  theme_bw() +
+  facet_grid(vector ~ treatment)
+
+ggsave(device = "pdf",
+       filename = "tp53_cds_r213x_delta_zoom_line.pdf",
+       width = 12,
+       height = 8,
+       path = save_dir)
+```

@@ -1,0 +1,166 @@
+---
+title: "Stockholm PCA Plots"
+author: "Jip van Dinter"
+date: "11/2/2021"
+output: html_document
+---
+
+# PCA
+
+Create PCA plots for the FUr TP53 read-through manuscript. Counts data was generated with FeatureCounts using CDS information from the ensembl reference GTF v102.
+
+### Establish global variables
+
+```{r global variables }
+data_dir <- folder_with_counts
+save_dir <- save_folder
+color_scheme <- c("#8F8F93","#FF8800","#43C1F0")
+rna_file <- file name for counts
+ribo_file <- file name for counts
+
+```
+
+```{r libraries message=FALSE, warning=FALSE}
+library(DESeq2)
+library(tidyverse)
+library(tximport)
+library(ggplot2)
+library(rtracklayer)
+```
+
+```{r Metadata}
+# Load metadata
+sample_info <- read.table(file = paste0(data_dir,"/metadata.txt"),
+                          header = T,
+                          sep = "\t")
+```
+
+# RIBO-seq
+
+## Load the data
+
+```{r RIBO data load}
+ribo_count_data <- list.files(path = data_dir,
+                              pattern = ribo_file,
+                              recursive = T)
+ribo_count_df <- read.table(file = paste(data_dir,ribo_count_data,sep = "/"),
+                                   header = T)
+colnames(ribo_count_df) <- sample_info[which(sample_info$SeqType == "RIBO"),]$Sample.ID
+```
+
+## Create DDS object and plot PCA
+
+```{r RIBO PCA}
+dds <- DESeqDataSetFromMatrix(countData = ribo_count_df,
+                              colData = sample_info[which(sample_info$SeqType == "RIBO"),],
+                              design = ~ group)
+vsd <- vst(dds, blind=F)
+
+ntop <- 500
+intgroup <- c("Condition","Batch")
+rv <- rowVars(assay(vsd))
+
+# select the ntop genes by variance
+select <- order(rv, decreasing=TRUE)[seq_len(min(500, length(rv)))]
+
+# perform a PCA on the data in assay(x) for the selected genes
+pca <- prcomp(t(assay(vsd)[select,]))
+
+# the contribution to the total variance for each component
+percentVar <- pca$sdev^2 / sum( pca$sdev^2 )
+
+intgroup.df <- as.data.frame(colData(vsd)[, intgroup, drop=FALSE])
+  
+# add the intgroup factors together to create a new grouping factor
+group <- if (length(intgroup) > 1) {
+  factor(apply( intgroup.df, 1, paste, collapse=":"))
+} else {
+  colData(vsd)[[intgroup]]
+}
+
+# assembly the data for the plot
+d <- data.frame(PC1=pca$x[,1], PC2=pca$x[,2], group=group, intgroup.df, name=colnames(vsd))
+d$Condition <- factor(d$Condition, levels = c("Untreated","G418","5FUR"))
+
+ggplot(data=d, aes_string(x="PC1", y="PC2", color="Condition", shape = "Batch")) + 
+    geom_point(size = 2.5) + 
+    xlab(paste0("PC1: ",round(percentVar[1] * 100),"% variance")) +
+    ylab(paste0("PC2: ",round(percentVar[2] * 100),"% variance")) +
+    theme_classic() +
+    scale_color_manual(values = color_scheme) +
+    scale_shape_manual(values = c(16, 18)) +
+    xlim(c(-20,35)) +
+    ylim(c(-10,20)) +
+    coord_fixed()
+
+ggsave(device = "pdf",
+       filename = "5Fur_stockholm_PCA_RIBO.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+```
+
+# RNA-seq computationally handled as RIBO-seq
+
+## Load the data
+```{r RNA-RIBO data load}
+# Counts
+rna_ribo_count_data <- list.files(path = data_dir,
+                              pattern = rna_file,
+                              recursive = T)
+rna_ribo_count_df <- read.table(file = paste(data_dir,rna_ribo_count_data,sep = "/"),
+                                   header = T)
+colnames(rna_ribo_count_df) <- sample_info[which(sample_info$SeqType == "RNA"),]$Sample.ID
+```
+
+## Create DDS object and plot PCA
+
+```{r RNA-RIBO PCA}
+dds <- DESeqDataSetFromMatrix(countData = rna_ribo_count_df,
+                              colData = sample_info[which(sample_info$SeqType == "RNA"),],
+                              design = ~ group)
+vsd <- vst(dds, blind=F)
+
+ntop <- 500
+intgroup <- c("Condition","Batch")
+rv <- rowVars(assay(vsd))
+
+# select the ntop genes by variance
+select <- order(rv, decreasing=TRUE)[seq_len(min(500, length(rv)))]
+
+# perform a PCA on the data in assay(x) for the selected genes
+pca <- prcomp(t(assay(vsd)[select,]))
+
+# the contribution to the total variance for each component
+percentVar <- pca$sdev^2 / sum( pca$sdev^2 )
+
+intgroup.df <- as.data.frame(colData(vsd)[, intgroup, drop=FALSE])
+  
+# add the intgroup factors together to create a new grouping factor
+group <- if (length(intgroup) > 1) {
+  factor(apply( intgroup.df, 1, paste, collapse=":"))
+} else {
+  colData(vsd)[[intgroup]]
+}
+
+# assembly the data for the plot
+d <- data.frame(PC1=pca$x[,1], PC2=pca$x[,2], group=group, intgroup.df, name=colnames(vsd))
+d$Condition <- factor(d$Condition, levels = c("Untreated","G418","5FUR"))
+
+ggplot(data=d, aes_string(x = "PC1", y = "PC2", color = "Condition", shape = "Batch")) + 
+    geom_point(size = 3) + 
+    xlab(paste0("PC1: ",round(percentVar[1] * 100),"% variance")) +
+    ylab(paste0("PC2: ",round(percentVar[2] * 100),"% variance")) +
+    theme_classic() +
+    scale_color_manual(values = color_scheme) +
+    scale_shape_manual(values = c(16, 18)) +
+    xlim(c(-20,35)) +
+    ylim(c(-10,20)) +
+    coord_fixed()
+
+ggsave(device = "pdf",
+       filename = "5Fur_stockholm_PCA_RNA_RIBO.pdf",
+       width = 8,
+       height = 8,
+       path = save_dir)
+```
