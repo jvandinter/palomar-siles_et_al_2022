@@ -1,7 +1,7 @@
 # README #
 
 
-This repository is a code deposition of the performed Ribo-seq analyses and raw figures in the FUr readthrough manuscript (link TBA). Code to generate the figures is found under **figures**. *SessionInfo.RMD* holds all required packages for the R code. Code to process Ribo-seq libraries to trimmed reads is located in the **pipeline** folder. Please note that our Ribo-seq pipeline is still in active development and that this is merely a historical snapshot to replicate our analyses. If your are interested in our current pipeline, please contact us.
+This repository is a code deposition of the performed Ribo-seq analyses and raw figures in the [FUr readthrough manuscript](https://rdcu.be/dd9dp). Code to generate the figures is found under **figures**. *SessionInfo.RMD* holds all required packages for the R code. Code to process Ribo-seq libraries to trimmed reads is located in the **pipeline** folder. Please note that our Ribo-seq pipeline is still in active development and that this is merely a historical snapshot to replicate our analyses. If your are interested in our current pipeline, please contact us.
 
 
 ## Subfolders ##
